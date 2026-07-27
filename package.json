@@ -1,0 +1,29 @@
+{
+	"name": "iiif-worker",
+	"version": "0.1.0",
+	"description": "IIIF Image API 3.0 server on Cloudflare Workers + R2",
+	"license": "MIT",
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"check": "biome check src ingest test bench && tsc --noEmit",
+		"fix": "biome check --write src ingest test bench",
+		"test": "bun test",
+		"types": "wrangler types",
+		"ingest": "bun run ingest/cli.ts"
+	},
+	"dependencies": {
+		"@cf-wasm/photon": "^0.3.7",
+		"hono": "^4.12.27"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.5",
+		"@cloudflare/workers-types": "^4.20260501.0",
+		"@types/bun": "^1.3.14",
+		"aws4fetch": "^1.0.20",
+		"sharp": "^0.34.2",
+		"typescript": "^5.5.2",
+		"wrangler": "^4.90.0"
+	}
+}

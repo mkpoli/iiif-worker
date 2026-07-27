@@ -1,0 +1,18 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "iiif-worker",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-07-01",
+	"compatibility_flags": ["nodejs_compat"],
+	"r2_buckets": [
+		{ "binding": "IMAGES", "bucket_name": "iiif-images" }
+	],
+	"vars": {
+		"PUBLIC_BASE": "https://iiif.mkpo.li/iiif/3",
+		"MAX_AREA": "50000000"
+	},
+	"observability": { "enabled": true },
+	"routes": [
+		{ "pattern": "iiif.mkpo.li", "custom_domain": true }
+	]
+}
