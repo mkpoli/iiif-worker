@@ -19,6 +19,8 @@ type Bindings = {
 	MAX_WIDTH?: string;
 	MAX_HEIGHT?: string;
 	MAX_AREA?: string;
+	/** Secret enabling the /ingest PUT route; unset disables ingest entirely. */
+	INGEST_TOKEN?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -189,6 +191,29 @@ app.get("/iiif/3/*", async (c, next) => {
 		if (e instanceof IIIFError) return c.json({ error: e.message }, e.status as 400, { ...CORS });
 		throw e;
 	}
+});
+
+/**
+ * Token-gated ingest: the CLI PUTs objects through the Worker instead of the
+ * Cloudflare API, which keeps bulk loads on the same S3-free path and out of
+ * the management API's rate budget. Disabled unless INGEST_TOKEN is set.
+ */
+app.put("/ingest/:key{.+}", async (c) => {
+	const token = c.env.INGEST_TOKEN;
+	if (!token) return c.json({ error: "ingest disabled" }, 404);
+	const got = c.req.header("Authorization");
+	if (got !== `Bearer ${token}`) return c.json({ error: "unauthorized" }, 403);
+	const key = decodeURIComponent(new URL(c.req.url).pathname.slice("/ingest/".length));
+	if (!key || key.includes("..")) return c.json({ error: "bad key" }, 400);
+	const body = await c.req.arrayBuffer();
+	if (body.byteLength === 0) return c.json({ error: "empty body" }, 400);
+	if (body.byteLength > 100 * 1024 * 1024) return c.json({ error: "too large" }, 413);
+	await c.env.IMAGES.put(key, body, {
+		httpMetadata: {
+			contentType: c.req.header("Content-Type") ?? "application/octet-stream",
+		},
+	});
+	return c.json({ ok: true, key, bytes: body.byteLength });
 });
 
 app.get("/", (c) =>
