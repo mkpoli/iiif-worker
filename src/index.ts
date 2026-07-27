@@ -45,18 +45,59 @@ async function loadMeta(env: Bindings, identifier: string): Promise<StoredMeta |
 
 app.options("*", (c) => c.body(null, 204, { ...CORS }));
 
-// Base URI → info.json redirect (baseUriRedirect feature).
-app.get("/iiif/3/:collection/:leaf", (c) => {
-	const id = `${c.req.param("collection")}/${c.req.param("leaf")}`;
-	return c.redirect(`${c.env.PUBLIC_BASE}/${id}/info.json`, 303);
+/**
+ * The identifier may contain URI-encoded slashes (the spec's own encoding for
+ * hierarchical identifiers), so routes parse the raw, undecoded path: the
+ * trailing IIIF segments are positional, everything before them is the
+ * identifier. Decoding happens only after the split.
+ */
+function splitRawPath(c: { req: { path: string; url: string } }): string[] {
+	const raw = new URL(c.req.url).pathname;
+	return raw.split("/").filter((s) => s !== "");
+}
+
+function identifierFrom(segments: string[], trailing: number): string | null {
+	// segments start with ["iiif", "3", ...identifier..., ...trailing...]
+	const idSegs = segments.slice(2, segments.length - trailing);
+	if (idSegs.length === 0) return null;
+	return idSegs.map((s) => decodeURIComponent(s)).join("/");
+}
+
+// Base URI → info.json redirect (baseUriRedirect feature). A path whose last
+// segment is info.json is information, never a base URI, regardless of how
+// many segments the identifier occupies.
+app.get("/iiif/3/:a", (c, next) => {
+	const segs = splitRawPath(c);
+	if (segs.at(-1) === "info.json") return next();
+	const id = identifierFrom(segs, 0);
+	if (!id) return c.json({ error: "missing identifier" }, 404, { ...CORS });
+	return c.redirect(`${c.env.PUBLIC_BASE}/${encodeId(id)}/info.json`, 303);
+});
+app.get("/iiif/3/:a/:b", (c, next) => {
+	const segs = splitRawPath(c);
+	if (segs.at(-1) === "info.json") return next();
+	const id = identifierFrom(segs, 0);
+	if (!id) return c.json({ error: "missing identifier" }, 404, { ...CORS });
+	return c.redirect(`${c.env.PUBLIC_BASE}/${encodeId(id)}/info.json`, 303);
 });
 
-app.get("/iiif/3/:collection/:leaf/info.json", async (c) => {
-	const id = `${c.req.param("collection")}/${c.req.param("leaf")}`;
+/** Re-encode an identifier for URLs we emit (slashes kept encoded). */
+function encodeId(id: string): string {
+	return id.split("/").map(encodeURIComponent).join("%2F");
+}
+
+async function infoResponse(
+	c: {
+		env: Bindings;
+		body: (b: string, s: 200, h: Record<string, string>) => Response;
+		json: (o: object, s: 404, h: Record<string, string>) => Response;
+	},
+	id: string,
+) {
 	const stored = await loadMeta(c.env, id);
 	if (!stored) return c.json({ error: "unknown identifier" }, 404, { ...CORS });
 	const doc = buildInfoJson({
-		id: `${c.env.PUBLIC_BASE}/${id}`,
+		id: `${c.env.PUBLIC_BASE}/${encodeId(id)}`,
 		meta: { width: stored.width, height: stored.height, ...metaLimits(c.env) },
 		scaleFactors: stored.levels,
 	});
@@ -65,6 +106,20 @@ app.get("/iiif/3/:collection/:leaf/info.json", async (c) => {
 		"Content-Type": 'application/ld+json;profile="http://iiif.io/api/image/3/context.json"',
 		"Cache-Control": "public, max-age=86400",
 	});
+}
+
+app.get("/iiif/3/:a/info.json", async (c) => {
+	const segs = splitRawPath(c);
+	const id = identifierFrom(segs, 1);
+	if (!id) return c.json({ error: "missing identifier" }, 404, { ...CORS });
+	return infoResponse(c, id);
+});
+
+app.get("/iiif/3/:a/:b/info.json", async (c) => {
+	const segs = splitRawPath(c);
+	const id = identifierFrom(segs, 1);
+	if (!id) return c.json({ error: "missing identifier" }, 404, { ...CORS });
+	return infoResponse(c, id);
 });
 
 app.get("/collections/:name/manifest.json", async (c) => {
@@ -77,15 +132,20 @@ app.get("/collections/:name/manifest.json", async (c) => {
 	});
 });
 
-app.get("/iiif/3/:collection/:leaf/:region/:size/:rotation/:qualityFormat", async (c) => {
-	const id = `${c.req.param("collection")}/${c.req.param("leaf")}`;
+app.get("/iiif/3/*", async (c, next) => {
+	const segs = splitRawPath(c);
+	// ["iiif","3",...id...,region,size,rotation,"quality.format"] — at least 7.
+	if (segs.length < 7) return next();
+	const id = identifierFrom(segs, 4);
+	if (!id) return next();
+	const trailing = segs.slice(-4).map((s) => decodeURIComponent(s)) as [
+		string,
+		string,
+		string,
+		string,
+	];
 	try {
-		const req = parseIIIFPath(
-			c.req.param("region"),
-			c.req.param("size"),
-			c.req.param("rotation"),
-			c.req.param("qualityFormat"),
-		);
+		const req = parseIIIFPath(...trailing);
 		const stored = await loadMeta(c.env, id);
 		if (!stored) return c.json({ error: "unknown identifier" }, 404, { ...CORS });
 		const meta: ImageMeta = {
@@ -97,9 +157,9 @@ app.get("/iiif/3/:collection/:leaf/:region/:size/:rotation/:qualityFormat", asyn
 
 		// Canonical URI redirect keeps the cache single-keyed.
 		const canonical = canonicalPath(req, resolved, meta);
-		const requestedPath = `${c.req.param("region")}/${c.req.param("size")}/${c.req.param("rotation")}/${c.req.param("qualityFormat")}`;
+		const requestedPath = trailing.join("/");
 		if (requestedPath !== canonical)
-			return c.redirect(`${c.env.PUBLIC_BASE}/${id}/${canonical}`, 303);
+			return c.redirect(`${c.env.PUBLIC_BASE}/${encodeId(id)}/${canonical}`, 303);
 
 		// Serve from edge cache when present.
 		const cacheKey = new Request(c.req.url);
