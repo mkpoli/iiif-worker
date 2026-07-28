@@ -1,0 +1,189 @@
+<div align="center">
+
+# iiif-worker
+
+**A IIIF image server on a Cloudflare Worker you own.**
+
+[![MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![Cloudflare Workers](https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers/)
+[![IIIF Image API 3.0](https://img.shields.io/badge/IIIF-Image_API_3.0_Level_2-1a3b5d)](https://iiif.io/api/image/3.0/)
+[![tests](https://img.shields.io/badge/tests-70_passing-success?logo=bun&logoColor=white)](#how-it-was-tested)
+
+</div>
+
+**iiif-worker** serves the [IIIF Image API 3.0](https://iiif.io/api/image/3.0/) from a
+single Cloudflare Worker backed by R2. It answers arbitrary region, size, rotation,
+quality, and format requests — `.../314,2173,1674,249/max/0/default.jpg`,
+`.../square/512,512/!90/gray.webp` — computing each one on demand and caching the
+result at the edge. It also serves `info.json` for each image and a IIIF Presentation 3
+manifest for each collection, so viewers like [OpenSeadragon](https://openseadragon.github.io/),
+[Mirador](https://projectmirador.org/), and the [Universal Viewer](https://universalviewer.io/)
+work against it directly.
+
+Two things bring people here. Hosted IIIF at [archive.org](https://iiif.archive.org/)
+and elsewhere goes down or slows to a crawl, and when it does, every image URL in every
+citation and every viewer breaks at once. Running your own image server usually means a
+Java or C++ daemon (Cantaloupe, IIPImage) on a box you keep patched. This runs on
+Workers, so there is no server to keep alive — the deployment is a `wrangler deploy`, the
+images live in your R2 bucket, and the same endpoint answers from anywhere.
+
+As far as the [IIIF community wiki](https://iiif.io/get-started/image-servers/) and a
+2026 search show, this is the first IIIF Image API server for Cloudflare Workers. The
+Lambda-based [serverless-iiif](https://github.com/samvera/serverless-iiif) does the same
+job on AWS, but its image work is native libvips, which a Workers isolate cannot load.
+
+---
+
+## What it does
+
+- **IIIF Image API 3.0, Level 2**, plus most of the optional features:
+  - **region** — `full`, `square`, `x,y,w,h`, `pct:x,y,w,h`
+  - **size** — `max`, `w,`, `,h`, `w,h`, `pct:n`, `!w,h` (confined), and the `^`
+    prefix for upscaling
+  - **rotation** — any degree, plus `!` mirroring
+  - **quality** — `default`, `color`, `gray`, `bitonal`
+  - **format** — `jpg`, `png`, `webp`
+  - canonical-URI redirects, a `profile` link header, CORS, and long-lived immutable
+    caching
+- **`info.json`** as an `ImageService3` document with `sizes`, `tiles`, and the
+  `extraFeatures` list a viewer reads to know what it can ask for.
+- **Presentation 3 manifests**, one per collection, generated at ingest time and served
+  as static JSON.
+- **On-demand, from a small pyramid.** Ingest stores each image at a few scales (full,
+  ½, ¼, ⅛). A request for a thumbnail or a tile decodes the smallest level that still
+  covers the output, so cost tracks the size asked for rather than the size of the
+  master.
+
+Image decoding, cropping, resizing, and rotation run in WebAssembly
+([@cf-wasm/photon](https://github.com/fineshopdesign/cf-wasm), a Workers build of
+[photon-rs](https://github.com/silvia-odwyer/photon)) inside the isolate. Nothing leaves
+Cloudflare between the R2 read and the response.
+
+## How it compares
+
+| | **iiif-worker** | [Cantaloupe](https://cantaloupe-project.github.io/) | [IIPImage](https://iipimage.sourceforge.io/) | [go-iiif](https://github.com/go-iiif/go-iiif) | [serverless-iiif](https://github.com/samvera/serverless-iiif) | static Level 0 |
+| :-- | :-: | :-: | :-: | :-: | :-: | :-: |
+| Runs on | Cloudflare Workers | your JVM host | your C++ host | your host / Lambda | AWS Lambda | any static host |
+| Image API level | 2 | 2 | 2 | 2 | 2 | 0 |
+| Arbitrary region / size / rotation | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ fixed tiles |
+| Server to keep running | none | JVM | daemon | daemon / Lambda | Lambda | none |
+| Source formats | JPEG · PNG · WebP | + TIFF · JP2 | + TIFF · JP2 | + TIFF | + TIFF · JP2 | pre-rendered |
+| Very large masters (100 MP+) | ❌ 128 MB isolate cap | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Per-request cost | Workers CPU-ms | fixed host | fixed host | host / CPU-ms | Lambda ms | none |
+| Setup | `wrangler deploy` | install + tune JVM | build + configure | build / package | AWS stack | run a tiler |
+| License | MIT | custom (BSD-like) | GPL | BSD-3 | Apache-2.0 | — |
+
+Where each other server wins: Cantaloupe, IIPImage, and serverless-iiif read JPEG 2000
+and multi-hundred-megapixel TIFFs directly, which iiif-worker cannot — the isolate has
+128 MB of memory, so the master has to fit decoded within that. For scanned books and
+photographs (a leaf here is 2155×3452, about 7.4 MP and ~30 MB decoded) that ceiling is
+far off; for gigapixel masters it is the wrong tool. Static Level-0 tiling stays the
+cheapest option when you never need an arbitrary crop and can pre-render every tile a
+viewer will request.
+
+## Quick start
+
+You need a [Cloudflare account](https://dash.cloudflare.com/) with Workers and R2, and
+[Bun](https://bun.sh/).
+
+```bash
+git clone https://github.com/mkpoli/iiif-worker
+cd iiif-worker
+bun install
+```
+
+Create a bucket and edit `wrangler.jsonc` — set `name`, the R2 `bucket_name`,
+`PUBLIC_BASE` (the absolute base your images will be served under, ending in `/iiif/3`),
+and the route hostname:
+
+```bash
+bunx wrangler r2 bucket create iiif-images
+```
+
+Deploy, and set the upload token the ingest CLI uses:
+
+```bash
+bunx wrangler deploy
+openssl rand -hex 24 | bunx wrangler secret put INGEST_TOKEN
+```
+
+Ingest a folder of images. Each becomes a IIIF image identified by
+`{collection}/{filename-without-extension}`:
+
+```bash
+export INGEST_TOKEN=<the token from above>
+bun run ingest/cli.ts ./scans --collection my-book --base https://iiif.example.com
+bun run scripts/push-tree.ts ./out https://iiif.example.com --verify
+```
+
+Now `https://iiif.example.com/iiif/3/my-book/0001/info.json` answers, and a viewer
+pointed at it can pan and zoom the whole book from
+`https://iiif.example.com/collections/my-book/manifest.json`.
+
+## Layout in R2
+
+One prefix per image; the ingest CLI writes this and the Worker reads it.
+
+```
+{collection}/{id}/meta.json            {"width","height","levels":[1,2,4,8],"format":"jpeg"}
+{collection}/{id}/L1.jpg               full-resolution level (L1), then L2, L4, L8
+collections/{collection}/manifest.json IIIF Presentation 3 manifest
+```
+
+`meta.json` is the only lookup on the hot path; the rest is decided from it.
+
+## How it was tested
+
+- **70 unit tests** (`bun test`) over the request parser and the region/size math,
+  built from the IIIF 3.0 syntax tables — the malformed-input cases the spec calls out,
+  the canonical-form rewrites, and the upscaling rules.
+- **The official [IIIF Image API validator](https://pypi.org/project/iiif-validator/)**
+  against a deployed instance serving the validator's own reference image: **22 of 24
+  checks pass**. The two that do not are `baseurl_redirect` and `jsonld`; both send a
+  bare `urllib` request with no browser `User-Agent`, which Cloudflare's default
+  bot protection answers with a 403 before the request reaches the Worker. With any
+  ordinary client the base-URI redirect and the `application/ld+json` content type are
+  both correct — the same two checks pass through a browser or `curl`. This is a
+  property of the zone's security settings, not of the server; a zone without bot
+  challenges passes all 24.
+
+## Timing
+
+Against a deployed instance (a 2155×3452 leaf, 15 warm runs each, measured with
+`bun run bench/bench.ts`):
+
+| Request | Cold | Warm p50 | Warm p90 |
+| :-- | --: | --: | --: |
+| `info.json` | 288 ms | 76 ms | 85 ms |
+| 512×512 tile | 200 ms | 92 ms | 98 ms |
+| region scaled to 800×200 | 204 ms | 92 ms | 104 ms |
+| full page confined to 600 | 486 ms | 320 ms | 448 ms |
+
+Cold is the first request for a given URL, before the edge cache holds it; warm is a
+repeat, served from cache. The full-page numbers are higher because that response
+decodes and re-encodes the whole leaf; region and tile requests read a smaller pyramid
+level. Numbers depend on the colo and the source image — reproduce them with the harness
+rather than trusting these.
+
+## Design notes
+
+**One backend, not two.** An early plan kept a second path that used the Cloudflare
+Images binding for the resize and encode. The binding crops by gravity and fit-box, not
+by the explicit `x,y,w,h` rectangle IIIF addresses, so a region request still needs a
+pixel crop in the Worker first — which is the part photon already does. The binding
+would have added a dependency and a second code path without removing the wasm decode,
+so the server does all image work through photon.
+
+**Memory, not CPU, is the ceiling.** A Workers isolate has 128 MB. Decoding a JPEG to
+RGBA costs about four bytes per pixel, so a ~24 MP master is the practical top end; the
+ingest CLI refuses larger sources and asks you to downsample first. Reading from a small
+pyramid level keeps most requests well under that, and keeps them fast.
+
+**Caching.** Every rendered response is stored in the Workers Cache API under its
+canonical URL and carries `Cache-Control: public, max-age=31536000, immutable`.
+Non-canonical request forms (say `pct:` regions, or `w,` sizes) 303-redirect to the
+canonical URL first, so the cache stays single-keyed per distinct image.
+
+## License
+
+[MIT](./LICENSE). Third-party components are listed in [THIRD-PARTY.md](./THIRD-PARTY.md).

@@ -1,4 +1,9 @@
 {
+	// Template config. Copy this, then change: name, the R2 bucket_name (must
+	// match a bucket you created with `wrangler r2 bucket create`), PUBLIC_BASE
+	// (the absolute base your images are served under, ending in /iiif/3), and
+	// the route hostname. Set INGEST_TOKEN as a secret to enable uploads:
+	//   openssl rand -hex 24 | wrangler secret put INGEST_TOKEN
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "iiif-worker",
 	"main": "src/index.ts",
@@ -8,11 +13,12 @@
 		{ "binding": "IMAGES", "bucket_name": "iiif-images" }
 	],
 	"vars": {
-		"PUBLIC_BASE": "https://iiif.mkpo.li/iiif/3",
+		"PUBLIC_BASE": "https://iiif.example.com/iiif/3",
+		// Optional output ceilings; MAX_AREA caps decoded output pixels.
 		"MAX_AREA": "50000000"
 	},
 	"observability": { "enabled": true },
 	"routes": [
-		{ "pattern": "iiif.mkpo.li", "custom_domain": true }
+		{ "pattern": "iiif.example.com", "custom_domain": true }
 	]
 }
