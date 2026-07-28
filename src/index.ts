@@ -7,7 +7,7 @@
  *   collections/{name}/manifest.json  IIIF Presentation 3 manifest (static)
  */
 
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { buildInfoJson } from "./infojson";
 import { canonicalPath, IIIFError, type ImageMeta, parseIIIFPath, resolve } from "./params";
 import { chooseLevel, type StoredMeta, transform } from "./pipeline";
@@ -33,12 +33,14 @@ const IMMUTABLE = "public, max-age=31536000, immutable";
 
 /**
  * Output ceiling applied when MAX_AREA is unset or unusable. An isolate has
- * 128 MB and a decoded pixel costs four bytes, so an unbounded output size is
- * a way for any anonymous request to exhaust the isolate. This value matches
- * the ingest CLI's source ceiling, so every `max` request on an ingestible
- * image still resolves.
+ * 128 MB and a decoded pixel costs four bytes, so an unbounded output size
+ * lets any anonymous request exhaust it. This matches the ingest CLI's source
+ * ceiling, so every `max` request on an ingestible image still resolves.
  */
-const DEFAULT_MAX_AREA = 25_000_000;
+const DEFAULT_MAX_AREA = 12_000_000;
+
+/** Largest body the ingest route will accept. */
+const MAX_INGEST_BYTES = 100 * 1024 * 1024;
 
 /** Env vars arrive as strings; anything not a positive number is unusable. */
 function positiveLimit(raw: string | undefined): number | undefined {
@@ -48,17 +50,39 @@ function positiveLimit(raw: string | undefined): number | undefined {
 }
 
 function metaLimits(env: Bindings): Partial<ImageMeta> {
+	const maxHeight = positiveLimit(env.MAX_HEIGHT);
+	// The spec only allows maxHeight alongside maxWidth, and reads a lone
+	// maxWidth as applying to both axes, so the pair is kept symmetric here.
+	const maxWidth = positiveLimit(env.MAX_WIDTH) ?? maxHeight;
 	return {
-		maxWidth: positiveLimit(env.MAX_WIDTH),
-		maxHeight: positiveLimit(env.MAX_HEIGHT),
+		maxWidth,
+		maxHeight: maxWidth === undefined ? undefined : (maxHeight ?? maxWidth),
 		maxArea: positiveLimit(env.MAX_AREA) ?? DEFAULT_MAX_AREA,
 	};
 }
 
-async function loadMeta(env: Bindings, identifier: string): Promise<StoredMeta | null> {
+/** Stored metadata plus the R2 etag, which versions the rendered-image cache. */
+interface LoadedMeta {
+	stored: StoredMeta;
+	version: string;
+}
+
+async function loadMeta(env: Bindings, identifier: string): Promise<LoadedMeta | null> {
 	const obj = await env.IMAGES.get(`${identifier}/meta.json`);
 	if (!obj) return null;
-	return (await obj.json()) as StoredMeta;
+	return { stored: (await obj.json()) as StoredMeta, version: obj.etag };
+}
+
+function jsonError(status: number, message: string): Response {
+	return new Response(JSON.stringify({ error: message }), {
+		status,
+		headers: { ...CORS, "Content-Type": "application/json" },
+	});
+}
+
+/** A 303 to the canonical location, carrying CORS so browsers can follow it. */
+function seeOther(location: string): Response {
+	return new Response(null, { status: 303, headers: { ...CORS, Location: location } });
 }
 
 app.options("*", (c) => c.body(null, 204, { ...CORS }));
@@ -95,31 +119,28 @@ function encodeId(id: string): string {
 	return id.split("/").map(encodeURIComponent).join("%2F");
 }
 
-async function infoResponse(
-	c: {
-		env: Bindings;
-		body: (b: string, s: 200, h: Record<string, string>) => Response;
-		json: (o: object, s: 404, h: Record<string, string>) => Response;
-	},
-	id: string,
-) {
-	const stored = await loadMeta(c.env, id);
-	if (!stored) return c.json({ error: "unknown identifier" }, 404, { ...CORS });
+async function infoResponse(env: Bindings, id: string): Promise<Response> {
+	const loaded = await loadMeta(env, id);
+	if (!loaded) return jsonError(404, "unknown identifier");
+	const { stored } = loaded;
 	const doc = buildInfoJson({
-		id: `${c.env.PUBLIC_BASE}/${encodeId(id)}`,
-		meta: { width: stored.width, height: stored.height, ...metaLimits(c.env) },
+		id: `${env.PUBLIC_BASE}/${encodeId(id)}`,
+		meta: { width: stored.width, height: stored.height, ...metaLimits(env) },
 		scaleFactors: stored.levels,
 	});
-	return c.body(JSON.stringify(doc), 200, {
-		...CORS,
-		"Content-Type": 'application/ld+json;profile="http://iiif.io/api/image/3/context.json"',
-		"Cache-Control": "public, max-age=86400",
+	return new Response(JSON.stringify(doc), {
+		status: 200,
+		headers: {
+			...CORS,
+			"Content-Type": 'application/ld+json;profile="http://iiif.io/api/image/3/context.json"',
+			"Cache-Control": "public, max-age=86400",
+		},
 	});
 }
 
 app.get("/collections/:name/manifest.json", async (c) => {
 	const obj = await c.env.IMAGES.get(`collections/${c.req.param("name")}/manifest.json`);
-	if (!obj) return c.json({ error: "unknown collection" }, 404, { ...CORS });
+	if (!obj) return jsonError(404, "unknown collection");
 	return c.body(obj.body, 200, {
 		...CORS,
 		"Content-Type": 'application/ld+json;profile="http://iiif.io/api/presentation/3/context.json"',
@@ -127,64 +148,110 @@ app.get("/collections/:name/manifest.json", async (c) => {
 	});
 });
 
-app.get("/iiif/3/*", async (c, next) => {
-	const segs = splitRawPath(c);
-	// ["iiif","3",...id...,region,size,rotation,"quality.format"] — at least 7.
-	if (segs.length < 7) return next();
-	const id = identifierFrom(segs, 4);
-	if (!id) return next();
-	const trailing = segs.slice(-4).map((s) => decodeURIComponent(s)) as [
-		string,
-		string,
-		string,
-		string,
-	];
+/**
+ * The rendered-image cache key. The query string never affects the pixels, so
+ * dropping it stops `?nonce=1`, `?nonce=2`, … from forcing a fresh decode per
+ * request. The meta.json etag rides along in its place, so re-ingesting an
+ * identifier moves every derivative to a fresh key instead of leaving the old
+ * pixels served under `immutable` for a year.
+ */
+function renderCacheKey(url: string, version: string): Request {
+	const u = new URL(url);
+	u.search = `?v=${encodeURIComponent(version)}`;
+	return new Request(u.toString());
+}
+
+/** `caches` is absent outside the Workers runtime, e.g. under a unit test. */
+function edgeCache(): Cache | null {
+	return typeof caches === "undefined" ? null : caches.default;
+}
+
+async function imageResponse(
+	c: Context<{ Bindings: Bindings }>,
+	id: string,
+	trailing: [string, string, string, string],
+): Promise<Response> {
+	const req = parseIIIFPath(...trailing);
+	const loaded = await loadMeta(c.env, id);
+	if (!loaded) return jsonError(404, "unknown identifier");
+	const { stored, version } = loaded;
+	const meta: ImageMeta = { width: stored.width, height: stored.height, ...metaLimits(c.env) };
+	const resolved = resolve(req, meta);
+
+	// Canonical URI redirect keeps the cache single-keyed.
+	const canonical = canonicalPath(resolved, meta);
+	const canonicalUrl = `${c.env.PUBLIC_BASE}/${encodeId(id)}/${canonical}`;
+	if (trailing.join("/") !== canonical) return seeOther(canonicalUrl);
+
+	const cache = edgeCache();
+	const cacheKey = renderCacheKey(c.req.url, version);
+	const hit = await cache?.match(cacheKey);
+	if (hit) return hit;
+
+	const choice = chooseLevel(resolved, stored);
+	const ext = stored.format === "jpeg" ? "jpg" : stored.format;
+	const levelObj = await c.env.IMAGES.get(`${id}/${choice.key}.${ext}`);
+	if (!levelObj)
+		return jsonError(500, `meta.json lists level ${choice.key} but the object is absent`);
+	const out = transform(new Uint8Array(await levelObj.arrayBuffer()), choice, resolved);
+
+	const res = new Response(out.bytes, {
+		status: 200,
+		headers: {
+			...CORS,
+			"Content-Type": out.contentType,
+			"Cache-Control": IMMUTABLE,
+			Link:
+				`<${canonicalUrl}>;rel="canonical", ` +
+				'<http://iiif.io/api/image/3/level2.json>;rel="profile"',
+		},
+	});
+	if (cache) c.executionCtx.waitUntil(cache.put(cacheKey, res.clone()));
+	return res;
+}
+
+/**
+ * One dispatcher for every image-API URL. The identifier is whatever precedes
+ * the positional trailing segments, so it works whether the client encoded its
+ * slashes (as the spec directs) or left them bare.
+ */
+app.get("/iiif/3/*", async (c) => {
+	const rest = splitRawPath(c.req.url).slice(2);
 	try {
-		const req = parseIIIFPath(...trailing);
-		const stored = await loadMeta(c.env, id);
-		if (!stored) return c.json({ error: "unknown identifier" }, 404, { ...CORS });
-		const meta: ImageMeta = {
-			width: stored.width,
-			height: stored.height,
-			...metaLimits(c.env),
-		};
-		const resolved = resolve(req, meta);
+		if (rest.length === 0) return jsonError(404, "missing identifier");
 
-		// Canonical URI redirect keeps the cache single-keyed.
-		const canonical = canonicalPath(req, resolved, meta);
-		const requestedPath = trailing.join("/");
-		if (requestedPath !== canonical)
-			return c.redirect(`${c.env.PUBLIC_BASE}/${encodeId(id)}/${canonical}`, 303);
+		if (rest.at(-1) === "info.json") {
+			if (rest.length < 2) return jsonError(404, "missing identifier");
+			return await infoResponse(c.env, decodeId(rest.slice(0, -1)));
+		}
 
-		// Serve from edge cache when present.
-		const cacheKey = new Request(c.req.url);
-		const cache = caches.default;
-		const hit = await cache.match(cacheKey);
-		if (hit) return hit;
+		// An image request is an identifier plus region/size/rotation/quality.format,
+		// and only the last of those carries a format extension.
+		if (rest.length >= 5 && rest[rest.length - 1]?.includes(".")) {
+			const trailing = rest.slice(-4).map(decodeSegment) as [string, string, string, string];
+			return await imageResponse(c, decodeId(rest.slice(0, -4)), trailing);
+		}
 
-		const choice = chooseLevel(resolved, stored);
-		const ext = stored.format === "jpeg" ? "jpg" : stored.format;
-		const levelObj = await c.env.IMAGES.get(`${id}/${choice.key}.${ext}`);
-		if (!levelObj) return c.json({ error: "missing pyramid level" }, 500, { ...CORS });
-		const levelBytes = new Uint8Array(await levelObj.arrayBuffer());
-		const out = transform(levelBytes, choice, resolved);
-
-		const res = new Response(out.bytes, {
-			status: 200,
-			headers: {
-				...CORS,
-				"Content-Type": out.contentType,
-				"Cache-Control": IMMUTABLE,
-				Link: '<http://iiif.io/api/image/3/level2.json>;rel="profile"',
-			},
-		});
-		c.executionCtx.waitUntil(cache.put(cacheKey, res.clone()));
-		return res;
+		// Everything else is a base URI, which redirects to its info.json.
+		return seeOther(`${c.env.PUBLIC_BASE}/${encodeId(decodeId(rest))}/info.json`);
 	} catch (e) {
-		if (e instanceof IIIFError) return c.json({ error: e.message }, e.status as 400, { ...CORS });
+		if (e instanceof IIIFError) return jsonError(e.status, e.message);
 		throw e;
 	}
 });
+
+/**
+ * Constant-time bearer check. A plain `!==` on the token returns as soon as
+ * two bytes differ, which times out the guess character by character.
+ */
+function bearerMatches(header: string | undefined, token: string): boolean {
+	if (!header) return false;
+	const a = new TextEncoder().encode(header);
+	const b = new TextEncoder().encode(`Bearer ${token}`);
+	let diff = a.length ^ b.length;
+	for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
+	return diff === 0;
+}
 
 /**
  * Token-gated ingest: the CLI PUTs objects through the Worker instead of the
@@ -193,20 +260,31 @@ app.get("/iiif/3/*", async (c, next) => {
  */
 app.put("/ingest/:key{.+}", async (c) => {
 	const token = c.env.INGEST_TOKEN;
-	if (!token) return c.json({ error: "ingest disabled" }, 404);
-	const got = c.req.header("Authorization");
-	if (got !== `Bearer ${token}`) return c.json({ error: "unauthorized" }, 403);
-	const key = decodeURIComponent(new URL(c.req.url).pathname.slice("/ingest/".length));
-	if (!key || key.includes("..")) return c.json({ error: "bad key" }, 400);
-	const body = await c.req.arrayBuffer();
-	if (body.byteLength === 0) return c.json({ error: "empty body" }, 400);
-	if (body.byteLength > 100 * 1024 * 1024) return c.json({ error: "too large" }, 413);
+	if (!token) return jsonError(404, "ingest disabled");
+	if (!bearerMatches(c.req.header("Authorization"), token)) return jsonError(403, "unauthorized");
+
+	let key: string;
+	try {
+		key = decodeURIComponent(new URL(c.req.url).pathname.slice("/ingest/".length));
+	} catch {
+		return jsonError(400, "malformed percent-encoding in key");
+	}
+	if (!key || key.includes("..")) return jsonError(400, "bad key");
+
+	// The body streams straight into R2, so the declared length is the only
+	// chance to reject an oversized upload before it costs isolate memory.
+	const declared = Number(c.req.header("Content-Length"));
+	if (!Number.isInteger(declared) || declared <= 0) return jsonError(411, "Content-Length required");
+	if (declared > MAX_INGEST_BYTES) return jsonError(413, "too large");
+	const body = c.req.raw.body;
+	if (!body) return jsonError(400, "empty body");
+
 	await c.env.IMAGES.put(key, body, {
 		httpMetadata: {
 			contentType: c.req.header("Content-Type") ?? "application/octet-stream",
 		},
 	});
-	return c.json({ ok: true, key, bytes: body.byteLength });
+	return c.json({ ok: true, key, bytes: declared });
 });
 
 app.get("/", (c) =>
@@ -216,5 +294,11 @@ app.get("/", (c) =>
 		spec: "https://iiif.io/api/image/3.0/",
 	}),
 );
+
+app.notFound(() => jsonError(404, "not found"));
+app.onError((e) => {
+	if (e instanceof IIIFError) return jsonError(e.status, e.message);
+	return jsonError(500, "internal error");
+});
 
 export default app;

@@ -40,6 +40,8 @@ export interface LevelChoice {
  */
 export function chooseLevel(resolved: ResolvedRequest, stored: StoredMeta): LevelChoice {
 	const { rect, outW, outH } = resolved;
+	if (!stored.levels.includes(1))
+		throw new IIIFError(500, "stored meta lists no level 1; the prefix needs re-ingesting");
 	let chosen = 1;
 	for (const f of [...stored.levels].sort((a, b) => b - a)) {
 		if (rect.w / f >= outW && rect.h / f >= outH) {
@@ -47,11 +49,16 @@ export function chooseLevel(resolved: ResolvedRequest, stored: StoredMeta): Leve
 			break;
 		}
 	}
+	// Both edges are rounded to the nearest level pixel rather than flooring the
+	// origin, which would drag the whole rectangle up to a full level pixel
+	// towards the top-left at every zoom step.
+	const x = Math.round(rect.x / chosen);
+	const y = Math.round(rect.y / chosen);
 	const scaled = {
-		x: Math.floor(rect.x / chosen),
-		y: Math.floor(rect.y / chosen),
-		w: Math.max(1, Math.round(rect.w / chosen)),
-		h: Math.max(1, Math.round(rect.h / chosen)),
+		x,
+		y,
+		w: Math.max(1, Math.round((rect.x + rect.w) / chosen) - x),
+		h: Math.max(1, Math.round((rect.y + rect.h) / chosen) - y),
 	};
 	return { factor: chosen, key: `L${chosen}`, rect: scaled };
 }
@@ -68,6 +75,12 @@ export function transform(
 	resolved: ResolvedRequest,
 ): EncodeResult {
 	const img = PhotonImage.new_from_byteslice(levelBytes);
+	/** Every intermediate, freed on the way out however this returns. */
+	let work = img;
+	const release = (next: PhotonImage) => {
+		if (work !== img) work.free();
+		work = next;
+	};
 	try {
 		const lw = img.get_width();
 		const lh = img.get_height();
@@ -78,50 +91,30 @@ export function transform(
 		const h = Math.min(choice.rect.h, lh - y);
 		if (w <= 0 || h <= 0) throw new IIIFError(400, "region has no pixels");
 
-		let work = crop(img, x, y, x + w, y + h);
-		if (work.get_width() !== resolved.outW || work.get_height() !== resolved.outH) {
-			const resized = resize(work, resolved.outW, resolved.outH, SamplingFilter.Lanczos3);
-			work.free();
-			work = resized;
-		}
+		// A whole-level region needs no crop, and skipping it avoids holding a
+		// second full-size decode — the peak that decides how large a master the
+		// isolate can serve at all.
+		if (x !== 0 || y !== 0 || w !== lw || h !== lh) release(crop(img, x, y, x + w, y + h));
+		if (work.get_width() !== resolved.outW || work.get_height() !== resolved.outH)
+			release(resize(work, resolved.outW, resolved.outH, SamplingFilter.Lanczos3));
 		if (resolved.rotation.mirror) fliph(work);
-		const deg = resolved.rotation.degrees;
-		if (deg !== 0) {
-			const rotated = rotate(work, deg);
-			work.free();
-			work = rotated;
-		}
+		if (resolved.rotation.degrees !== 0) release(rotate(work, resolved.rotation.degrees));
 		if (resolved.quality === "gray") grayscale(work);
 		else if (resolved.quality === "bitonal") {
 			grayscale(work);
 			threshold(work, 128);
 		}
 
-		let bytes: Uint8Array;
-		let contentType: string;
 		switch (resolved.format) {
 			case "png":
-				bytes = work.get_bytes();
-				contentType = "image/png";
-				break;
+				return { bytes: work.get_bytes(), contentType: "image/png" };
 			case "webp":
-				bytes = work.get_bytes_webp();
-				contentType = "image/webp";
-				break;
+				return { bytes: work.get_bytes_webp(), contentType: "image/webp" };
 			default:
-				bytes = work.get_bytes_jpeg(85);
-				contentType = "image/jpeg";
-				break;
+				return { bytes: work.get_bytes_jpeg(85), contentType: "image/jpeg" };
 		}
-		work.free();
-		return { bytes, contentType };
 	} finally {
-		// img may already be consumed by crop; PhotonImage.free is idempotent-safe
-		// only when not consumed — crop() takes &img so the original must be freed.
-		try {
-			img.free();
-		} catch {
-			/* already freed */
-		}
+		if (work !== img) work.free();
+		img.free();
 	}
 }

@@ -202,21 +202,21 @@ describe("canonical path", () => {
 	test("full/max/0/default.jpg stays", () => {
 		const req = parseIIIFPath("full", "max", "0", "default.jpg");
 		const r = resolve(req, meta);
-		expect(canonicalPath(req, r, meta)).toBe("full/max/0/default.jpg");
+		expect(canonicalPath(r, meta)).toBe("full/max/0/default.jpg");
 	});
 	test("pct region canonicalizes to pixels", () => {
 		const req = parseIIIFPath("pct:0,0,50,50", "max", "0", "default.jpg");
 		const r = resolve(req, meta);
-		expect(canonicalPath(req, r, meta)).toBe("0,0,1078,1726/max/0/default.jpg");
+		expect(canonicalPath(r, meta)).toBe("0,0,1078,1726/max/0/default.jpg");
 	});
 	test("w, canonicalizes to w,h", () => {
 		const req = parseIIIFPath("full", "431,", "0", "default.jpg");
 		const r = resolve(req, meta);
-		expect(canonicalPath(req, r, meta)).toBe("full/431,690/0/default.jpg");
+		expect(canonicalPath(r, meta)).toBe("full/431,690/0/default.jpg");
 	});
 	test("mirror + arbitrary rotation preserved", () => {
 		const req = parseIIIFPath("square", "!400,400", "!22.5", "gray.png");
 		const r = resolve(req, meta);
-		expect(canonicalPath(req, r, meta)).toBe("0,648,2155,2155/400,400/!22.5/gray.png");
+		expect(canonicalPath(r, meta)).toBe("0,648,2155,2155/400,400/!22.5/gray.png");
 	});
 });

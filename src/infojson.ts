@@ -16,13 +16,19 @@ export interface InfoOptions {
 export function buildInfoJson(o: InfoOptions): Record<string, unknown> {
 	const { meta } = o;
 	const tileSize = o.tileSize ?? 512;
+	const maxW = meta.maxWidth ?? Number.POSITIVE_INFINITY;
+	const maxH = meta.maxHeight ?? Number.POSITIVE_INFINITY;
+	const maxArea = meta.maxArea ?? Number.POSITIVE_INFINITY;
+	// Every entry in `sizes` is a size the server will serve, so anything a
+	// configured ceiling would reject is left out rather than advertised.
 	const sizes = o.scaleFactors
 		.slice()
 		.sort((a, b) => b - a)
 		.map((f) => ({
 			width: Math.floor(meta.width / f),
 			height: Math.floor(meta.height / f),
-		}));
+		}))
+		.filter((s) => s.width <= maxW && s.height <= maxH && s.width * s.height <= maxArea);
 	const doc: Record<string, unknown> = {
 		"@context": "http://iiif.io/api/image/3/context.json",
 		id: o.id,
