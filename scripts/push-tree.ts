@@ -47,8 +47,19 @@ if (verify) {
 	let checked = 0;
 	for (const p of prefixes) {
 		const enc = p.split("/").map(encodeURIComponent).join("%2F");
-		const res = await fetch(`${base}/iiif/3/${enc}/info.json`, { method: "HEAD" });
-		if (res.status === 200) skipPrefixes.add(p);
+		for (let attempt = 1; attempt <= 4; attempt++) {
+			try {
+				const res = await fetch(`${base}/iiif/3/${enc}/info.json`, {
+					method: "HEAD",
+					signal: AbortSignal.timeout(15000),
+				});
+				if (res.status === 200) skipPrefixes.add(p);
+				break;
+			} catch {
+				if (attempt === 4) break;
+				await Bun.sleep(attempt * 1000);
+			}
+		}
 		checked += 1;
 		if (checked % 200 === 0) console.log(`  verified ${checked}/${prefixes.size}`);
 	}
@@ -74,6 +85,7 @@ async function pushOne(file: string): Promise<void> {
 				method: "PUT",
 				headers: { Authorization: `Bearer ${token}`, "Content-Type": ct },
 				body,
+				signal: AbortSignal.timeout(30000),
 			});
 			if (res.ok) {
 				done += 1;
