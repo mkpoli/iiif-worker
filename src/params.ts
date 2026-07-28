@@ -278,22 +278,26 @@ export function resolveSize(
 	const maxH = meta.maxHeight ?? Number.POSITIVE_INFINITY;
 	const maxArea = meta.maxArea ?? Number.POSITIVE_INFINITY;
 
-	const fitMax = (w: number, h: number): { outW: number; outH: number } => {
-		let outW = w;
-		let outH = h;
-		const scale = Math.min(1, maxW / outW, maxH / outH, Math.sqrt(maxArea / (outW * outH)));
-		if (scale < 1) {
-			outW = Math.floor(outW * scale);
-			outH = Math.floor(outH * scale);
-		}
-		return { outW: Math.max(1, outW), outH: Math.max(1, outH) };
+	/** Largest scale factor for which w×h still satisfies every server ceiling. */
+	const limitScale = (w: number, h: number): number =>
+		Math.min(maxW / w, maxH / h, Math.sqrt(maxArea / (w * h)));
+
+	/**
+	 * `max` fills the ceilings without ever enlarging; `^max` scales up to them.
+	 * With no ceiling configured there is nothing to scale up to, so `^max`
+	 * yields the region unchanged.
+	 */
+	const fitMax = (w: number, h: number, upscale: boolean): { outW: number; outH: number } => {
+		const scale = upscale ? limitScale(w, h) : Math.min(1, limitScale(w, h));
+		if (!Number.isFinite(scale) || scale === 1) return { outW: w, outH: h };
+		return { outW: Math.max(1, Math.floor(w * scale)), outH: Math.max(1, Math.floor(h * scale)) };
 	};
 
 	let outW: number;
 	let outH: number;
 	switch (size.kind) {
 		case "max": {
-			return fitMax(rect.w, rect.h);
+			return fitMax(rect.w, rect.h, size.upscale);
 		}
 		case "w":
 			outW = size.w;
@@ -312,7 +316,11 @@ export function resolveSize(
 			outH = size.h;
 			break;
 		case "confined": {
-			const scale = Math.min(size.w / rect.w, size.h / rect.h);
+			// The result is as large as possible while fitting inside the box, the
+			// server ceilings, and — without `^` — the region itself. A box larger
+			// than any of those shrinks the scale rather than failing the request.
+			let scale = Math.min(size.w / rect.w, size.h / rect.h, limitScale(rect.w, rect.h));
+			if (!size.upscale) scale = Math.min(1, scale);
 			outW = Math.round(rect.w * scale);
 			outH = Math.round(rect.h * scale);
 			break;
@@ -358,9 +366,13 @@ export function canonicalPath(
 			? "full"
 			: `${rect.x},${rect.y},${rect.w},${rect.h}`;
 	let sizeSeg: string;
-	const caret = req.size.upscale ? "^" : "";
-	if (req.size.kind === "max") sizeSeg = `${caret}max`;
-	else sizeSeg = `${caret}${outW},${outH}`;
+	if (req.size.kind === "max") sizeSeg = `${req.size.upscale ? "^" : ""}max`;
+	else {
+		// `^` belongs in the canonical form only when the result is genuinely
+		// larger than the region, whatever the client wrote.
+		const caret = outW > rect.w || outH > rect.h ? "^" : "";
+		sizeSeg = `${caret}${outW},${outH}`;
+	}
 	const deg = resolved.rotation.degrees;
 	const degSeg = Number.isInteger(deg) ? String(deg) : String(deg).replace(/0+$/, "");
 	const rotationSeg = `${resolved.rotation.mirror ? "!" : ""}${degSeg}`;

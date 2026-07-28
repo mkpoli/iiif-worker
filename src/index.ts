@@ -31,11 +31,27 @@ const CORS = {
 } as const;
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
+/**
+ * Output ceiling applied when MAX_AREA is unset or unusable. An isolate has
+ * 128 MB and a decoded pixel costs four bytes, so an unbounded output size is
+ * a way for any anonymous request to exhaust the isolate. This value matches
+ * the ingest CLI's source ceiling, so every `max` request on an ingestible
+ * image still resolves.
+ */
+const DEFAULT_MAX_AREA = 25_000_000;
+
+/** Env vars arrive as strings; anything not a positive number is unusable. */
+function positiveLimit(raw: string | undefined): number | undefined {
+	if (raw === undefined || raw === "") return undefined;
+	const n = Number(raw);
+	return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+}
+
 function metaLimits(env: Bindings): Partial<ImageMeta> {
 	return {
-		maxWidth: env.MAX_WIDTH ? Number(env.MAX_WIDTH) : undefined,
-		maxHeight: env.MAX_HEIGHT ? Number(env.MAX_HEIGHT) : undefined,
-		maxArea: env.MAX_AREA ? Number(env.MAX_AREA) : undefined,
+		maxWidth: positiveLimit(env.MAX_WIDTH),
+		maxHeight: positiveLimit(env.MAX_HEIGHT),
+		maxArea: positiveLimit(env.MAX_AREA) ?? DEFAULT_MAX_AREA,
 	};
 }
 
@@ -49,39 +65,30 @@ app.options("*", (c) => c.body(null, 204, { ...CORS }));
 
 /**
  * The identifier may contain URI-encoded slashes (the spec's own encoding for
- * hierarchical identifiers), so routes parse the raw, undecoded path: the
+ * hierarchical identifiers), so routing works on the raw, undecoded path: the
  * trailing IIIF segments are positional, everything before them is the
  * identifier. Decoding happens only after the split.
  */
-function splitRawPath(c: { req: { path: string; url: string } }): string[] {
-	const raw = new URL(c.req.url).pathname;
-	return raw.split("/").filter((s) => s !== "");
+function splitRawPath(url: string): string[] {
+	return new URL(url).pathname.split("/").filter((s) => s !== "");
 }
 
-function identifierFrom(segments: string[], trailing: number): string | null {
-	// segments start with ["iiif", "3", ...identifier..., ...trailing...]
-	const idSegs = segments.slice(2, segments.length - trailing);
-	if (idSegs.length === 0) return null;
-	return idSegs.map((s) => decodeURIComponent(s)).join("/");
+/** Decode path segments into an identifier, rejecting invalid escapes. */
+function decodeId(segments: string[]): string {
+	try {
+		return segments.map((s) => decodeURIComponent(s)).join("/");
+	} catch {
+		throw new IIIFError(400, "malformed percent-encoding in identifier");
+	}
 }
 
-// Base URI → info.json redirect (baseUriRedirect feature). A path whose last
-// segment is info.json is information, never a base URI, regardless of how
-// many segments the identifier occupies.
-app.get("/iiif/3/:a", (c, next) => {
-	const segs = splitRawPath(c);
-	if (segs.at(-1) === "info.json") return next();
-	const id = identifierFrom(segs, 0);
-	if (!id) return c.json({ error: "missing identifier" }, 404, { ...CORS });
-	return c.redirect(`${c.env.PUBLIC_BASE}/${encodeId(id)}/info.json`, 303);
-});
-app.get("/iiif/3/:a/:b", (c, next) => {
-	const segs = splitRawPath(c);
-	if (segs.at(-1) === "info.json") return next();
-	const id = identifierFrom(segs, 0);
-	if (!id) return c.json({ error: "missing identifier" }, 404, { ...CORS });
-	return c.redirect(`${c.env.PUBLIC_BASE}/${encodeId(id)}/info.json`, 303);
-});
+function decodeSegment(segment: string): string {
+	try {
+		return decodeURIComponent(segment);
+	} catch {
+		throw new IIIFError(400, "malformed percent-encoding in request");
+	}
+}
 
 /** Re-encode an identifier for URLs we emit (slashes kept encoded). */
 function encodeId(id: string): string {
@@ -109,20 +116,6 @@ async function infoResponse(
 		"Cache-Control": "public, max-age=86400",
 	});
 }
-
-app.get("/iiif/3/:a/info.json", async (c) => {
-	const segs = splitRawPath(c);
-	const id = identifierFrom(segs, 1);
-	if (!id) return c.json({ error: "missing identifier" }, 404, { ...CORS });
-	return infoResponse(c, id);
-});
-
-app.get("/iiif/3/:a/:b/info.json", async (c) => {
-	const segs = splitRawPath(c);
-	const id = identifierFrom(segs, 1);
-	if (!id) return c.json({ error: "missing identifier" }, 404, { ...CORS });
-	return infoResponse(c, id);
-});
 
 app.get("/collections/:name/manifest.json", async (c) => {
 	const obj = await c.env.IMAGES.get(`collections/${c.req.param("name")}/manifest.json`);
