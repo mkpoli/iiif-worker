@@ -274,7 +274,8 @@ app.put("/ingest/:key{.+}", async (c) => {
 	// The body streams straight into R2, so the declared length is the only
 	// chance to reject an oversized upload before it costs isolate memory.
 	const declared = Number(c.req.header("Content-Length"));
-	if (!Number.isInteger(declared) || declared <= 0) return jsonError(411, "Content-Length required");
+	if (!Number.isInteger(declared) || declared <= 0)
+		return jsonError(411, "Content-Length required");
 	if (declared > MAX_INGEST_BYTES) return jsonError(413, "too large");
 	const body = c.req.raw.body;
 	if (!body) return jsonError(400, "empty body");

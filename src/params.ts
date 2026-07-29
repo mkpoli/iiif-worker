@@ -105,6 +105,10 @@ export interface ResolvedRequest {
 	/** Output dimensions before rotation. */
 	outW: number;
 	outH: number;
+	/** The requested size was `max`/`^max`, so the canonical form keeps `max`. */
+	sizeIsMax: boolean;
+	/** The size segment carried the `^` upscaling prefix. */
+	upscale: boolean;
 	rotation: Rotation;
 	quality: Quality;
 	format: Format;
@@ -335,6 +339,8 @@ export function resolve(req: IIIFRequest, meta: ImageMeta): ResolvedRequest {
 		rect,
 		outW,
 		outH,
+		sizeIsMax: req.size.kind === "max",
+		upscale: req.size.upscale,
 		rotation: req.rotation,
 		quality: req.quality,
 		format: req.format,
@@ -347,19 +353,15 @@ export function resolve(req: IIIFRequest, meta: ImageMeta): ResolvedRequest {
  * when upscaling was requested); rotation without trailing zeros; the
  * `default` quality.
  */
-export function canonicalPath(
-	req: IIIFRequest,
-	resolved: ResolvedRequest,
-	meta: ImageMeta,
-): string {
+export function canonicalPath(resolved: ResolvedRequest, meta: ImageMeta): string {
 	const { rect, outW, outH } = resolved;
 	const regionSeg =
 		rect.x === 0 && rect.y === 0 && rect.w === meta.width && rect.h === meta.height
 			? "full"
 			: `${rect.x},${rect.y},${rect.w},${rect.h}`;
 	let sizeSeg: string;
-	const caret = req.size.upscale ? "^" : "";
-	if (req.size.kind === "max") sizeSeg = `${caret}max`;
+	const caret = resolved.upscale ? "^" : "";
+	if (resolved.sizeIsMax) sizeSeg = `${caret}max`;
 	else sizeSeg = `${caret}${outW},${outH}`;
 	const deg = resolved.rotation.degrees;
 	const degSeg = Number.isInteger(deg) ? String(deg) : String(deg).replace(/0+$/, "");
