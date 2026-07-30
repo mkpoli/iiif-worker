@@ -225,3 +225,56 @@ describe("metadata caching", () => {
 		expect(stored?.headers.get("Cache-Control")).toBe("max-age=60");
 	});
 });
+
+describe("rights and partOf in the information document", () => {
+	const MANIFEST = "https://x.test/collections/demo/manifest.json";
+
+	async function info(stored: Record<string, unknown>) {
+		const env = {
+			IMAGES: bucket("v1", stored).IMAGES,
+			PUBLIC_BASE: "https://x.test/iiif/3",
+		};
+		const res = await app.fetch(
+			new Request("https://x.test/iiif/3/bk/info.json"),
+			env,
+			ctx as never,
+		);
+		return (await res.json()) as Record<string, unknown>;
+	}
+
+	test("neither appears when the stored metadata has neither", async () => {
+		const d = await info(STORED);
+		expect(d.rights).toBeUndefined();
+		expect(d.partOf).toBeUndefined();
+	});
+
+	test("a Creative Commons licence is published", async () => {
+		const d = await info({ ...STORED, rights: "https://creativecommons.org/licenses/by/4.0/" });
+		expect(d.rights).toBe("https://creativecommons.org/licenses/by/4.0/");
+	});
+
+	test("a RightsStatements.org statement is published", async () => {
+		const d = await info({ ...STORED, rights: "http://rightsstatements.org/vocab/InC/1.0/" });
+		expect(d.rights).toBe("http://rightsstatements.org/vocab/InC/1.0/");
+	});
+
+	test.each([
+		"not a uri",
+		"https://example.com/my-own-licence",
+		"CC-BY-4.0",
+		"https://opensource.org/licenses/MIT",
+	])("a value the spec does not permit (%p) is dropped, not published", async (rights) => {
+		// The property is restricted to Creative Commons and RightsStatements.org
+		// URIs, so emitting anything else would make the document non-conformant.
+		expect((await info({ ...STORED, rights })).rights).toBeUndefined();
+	});
+
+	test("partOf is passed through", async () => {
+		const partOf = [{ id: MANIFEST, type: "Manifest", label: { none: ["Demo"] } }];
+		expect((await info({ ...STORED, partOf })).partOf).toEqual(partOf);
+	});
+
+	test("an empty partOf is omitted rather than emitted bare", async () => {
+		expect((await info({ ...STORED, partOf: [] })).partOf).toBeUndefined();
+	});
+});

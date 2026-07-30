@@ -84,6 +84,17 @@ The first command builds each image into a small pyramid on your machine. The
 second uploads it. Splitting them means an interrupted upload can be resumed —
 re-run the second command and `--verify` skips what is already there.
 
+Add `--rights` to record a licence, and every image gets it:
+
+```bash
+bun run ingest/cli.ts ./scans --collection my-book --base $BASE --local ./out \
+  --rights https://creativecommons.org/licenses/by-sa/4.0/
+```
+
+It must be a Creative Commons or RightsStatements.org URI — the specification
+allows nothing else there — and ingest refuses anything it does not recognise
+rather than letting a viewer receive a document it cannot trust.
+
 Sources may be JPEG, PNG, WebP or TIFF, up to 12 megapixels. Larger masters are
 refused with a message telling you to downsample; see
 [the ceiling](#why-12-megapixels) below.

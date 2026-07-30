@@ -22,6 +22,10 @@ export interface StoredMeta {
 	levels: number[];
 	/** Content type of stored level files. */
 	format: "jpeg" | "png" | "webp";
+	/** A licence or rights statement URI, recorded at ingest. */
+	rights?: string;
+	/** Resources that reference this image, such as its collection manifest. */
+	partOf?: { id: string; type: string; label?: Record<string, string[]> }[];
 }
 
 export interface LevelChoice {
