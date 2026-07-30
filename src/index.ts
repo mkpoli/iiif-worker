@@ -86,7 +86,13 @@ function jsonError(status: number, message: string): Response {
 
 /** A 303 to the canonical location, carrying CORS so browsers can follow it. */
 function seeOther(location: string): Response {
-	return new Response(null, { status: 303, headers: { ...CORS, Location: location } });
+	// The mapping from a request spelling to its canonical form never changes,
+	// so a viewer that keeps asking in its own dialect pays for the hop once
+	// rather than once per tile.
+	return new Response(null, {
+		status: 303,
+		headers: { ...CORS, Location: location, "Cache-Control": IMMUTABLE },
+	});
 }
 
 app.options("*", (c) => c.body(null, 204, { ...CORS }));
