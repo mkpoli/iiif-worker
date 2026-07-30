@@ -136,6 +136,13 @@ describe("region resolution", () => {
 			w: 150,
 			h: 100,
 		}));
+	test("a pct region starting inside the last column is not rejected", () =>
+		expect(resolveRegion({ kind: "pct", x: 99.9, y: 0, w: 1, h: 100 }, small)).toEqual({
+			x: 299,
+			y: 0,
+			w: 1,
+			h: 200,
+		}));
 	test("region past edge → 400", () =>
 		expect(() => resolveRegion({ kind: "pixels", x: 2155, y: 0, w: 10, h: 10 }, meta)).toThrow(
 			IIIFError,

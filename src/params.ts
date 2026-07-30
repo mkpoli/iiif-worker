@@ -250,9 +250,11 @@ export function resolveRegion(region: Region, meta: ImageMeta): Rect {
 			break;
 		}
 		case "pct":
+			// The origin floors so a region beginning inside the final pixel column
+			// still starts inside the image; only the extent rounds.
 			rect = {
-				x: Math.round((region.x / 100) * width),
-				y: Math.round((region.y / 100) * height),
+				x: Math.floor((region.x / 100) * width),
+				y: Math.floor((region.y / 100) * height),
 				w: Math.round((region.w / 100) * width),
 				h: Math.round((region.h / 100) * height),
 			};
