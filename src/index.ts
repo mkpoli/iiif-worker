@@ -77,6 +77,31 @@ async function loadMeta(env: Bindings, identifier: string): Promise<LoadedMeta |
 	return { stored: (await obj.json()) as StoredMeta, version: obj.etag };
 }
 
+/**
+ * An entity tag for a response. R2 hands back the stored object's etag, which
+ * changes whenever a prefix is re-ingested, so it identifies the bytes; the
+ * extra parts distinguish responses that share a source but differ in output.
+ */
+function entityTag(...parts: string[]): string {
+	return `"${parts.join("-").replace(/"/g, "")}"`;
+}
+
+/**
+ * `If-None-Match` is a list, and `*` matches anything. A weak comparison is the
+ * right one for cache revalidation, so a `W/` prefix on either side is ignored.
+ */
+function etagMatches(header: string | undefined, tag: string): boolean {
+	if (!header) return false;
+	const bare = (t: string) => t.trim().replace(/^W\//, "");
+	if (header.trim() === "*") return true;
+	return header.split(",").some((candidate) => bare(candidate) === bare(tag));
+}
+
+/** 304 carries the headers that would have validated the cached copy. */
+function notModified(headers: Record<string, string>): Response {
+	return new Response(null, { status: 304, headers });
+}
+
 function jsonError(status: number, message: string): Response {
 	return new Response(JSON.stringify({ error: message }), {
 		status,
@@ -147,24 +172,36 @@ async function infoResponse(
 	env: Bindings,
 	id: string,
 	accept: string | undefined,
+	ifNoneMatch: string | undefined,
 ): Promise<Response> {
 	const loaded = await loadMeta(env, id);
 	if (!loaded) return jsonError(404, "unknown identifier");
-	const { stored } = loaded;
+	const { stored, version } = loaded;
+	const contentType = infoContentType(accept);
+	// The document depends on the stored metadata, on the configured ceilings,
+	// and on which media type was negotiated, so all three decide the tag.
+	const limits = metaLimits(env);
+	const tag = entityTag(
+		version,
+		String(limits.maxWidth ?? 0),
+		String(limits.maxHeight ?? 0),
+		String(limits.maxArea ?? 0),
+		contentType.startsWith("application/ld") ? "ld" : "json",
+	);
+	const headers = {
+		...CORS,
+		"Content-Type": contentType,
+		Vary: "Accept",
+		"Cache-Control": "public, max-age=86400",
+		ETag: tag,
+	};
+	if (etagMatches(ifNoneMatch, tag)) return notModified(headers);
 	const doc = buildInfoJson({
 		id: `${env.PUBLIC_BASE}/${encodeId(id)}`,
-		meta: { width: stored.width, height: stored.height, ...metaLimits(env) },
+		meta: { width: stored.width, height: stored.height, ...limits },
 		scaleFactors: stored.levels,
 	});
-	return new Response(JSON.stringify(doc), {
-		status: 200,
-		headers: {
-			...CORS,
-			"Content-Type": infoContentType(accept),
-			Vary: "Accept",
-			"Cache-Control": "public, max-age=86400",
-		},
-	});
+	return new Response(JSON.stringify(doc), { status: 200, headers });
 }
 
 app.get("/collections/:name/manifest.json", async (c) => {
@@ -212,6 +249,12 @@ async function imageResponse(
 	const canonicalUrl = `${c.env.PUBLIC_BASE}/${encodeId(id)}/${canonical}`;
 	if (trailing.join("/") !== canonical) return seeOther(canonicalUrl);
 
+	// The canonical URL fixes every pixel of the output, so the stored version is
+	// all that has to change for the bytes to change.
+	const tag = entityTag(version);
+	if (etagMatches(c.req.header("If-None-Match"), tag))
+		return notModified({ ...CORS, "Cache-Control": IMMUTABLE, ETag: tag });
+
 	const cache = edgeCache();
 	const cacheKey = renderCacheKey(c.req.url, version);
 	const hit = await cache?.match(cacheKey);
@@ -230,6 +273,7 @@ async function imageResponse(
 			...CORS,
 			"Content-Type": out.contentType,
 			"Cache-Control": IMMUTABLE,
+			ETag: tag,
 			Link:
 				`<${canonicalUrl}>;rel="canonical", ` +
 				'<http://iiif.io/api/image/3/level2.json>;rel="profile"',
@@ -251,7 +295,12 @@ app.get("/iiif/3/*", async (c) => {
 
 		if (rest.at(-1) === "info.json") {
 			if (rest.length < 2) return jsonError(404, "missing identifier");
-			return await infoResponse(c.env, decodeId(rest.slice(0, -1)), c.req.header("Accept"));
+			return await infoResponse(
+				c.env,
+				decodeId(rest.slice(0, -1)),
+				c.req.header("Accept"),
+				c.req.header("If-None-Match"),
+			);
 		}
 
 		// An image request is an identifier plus region/size/rotation/quality.format,
