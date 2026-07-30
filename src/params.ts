@@ -355,16 +355,18 @@ export function resolveSize(
 			outH = size.h;
 			break;
 		case "confined": {
-			// The result is as large as possible while fitting inside the box, the
-			// server ceilings, and — without `^` — the region itself. A box larger
-			// than any of those shrinks the scale rather than failing the request.
-			let scale = Math.min(size.w / rect.w, size.h / rect.h, limitScale(rect.w, rect.h, meta));
-			if (!size.upscale) scale = Math.min(1, scale);
+			// `!w,h` scales to fit the box and nothing more. A box larger than the
+			// region therefore asks for enlargement, which without `^` is an error
+			// caught below — the same rule every other size form follows.
+			let scale = Math.min(size.w / rect.w, size.h / rect.h);
+			if (size.upscale) {
+				// `^!w,h` may enlarge, bounded by the box and the server ceilings.
+				scale = Math.min(scale, limitScale(rect.w, rect.h, meta));
+			}
 			outW = Math.round(rect.w * scale);
 			outH = Math.round(rect.h * scale);
 			// Rounding each axis to its nearest pixel can carry the pair back over
-			// maxArea. This form has to fit inside the ceilings rather than fail, so
-			// the longer side gives up pixels until it does.
+			// maxArea, so the longer side gives up pixels until it fits.
 			while (outW * outH > maxArea && (outW > 1 || outH > 1)) {
 				if (outW >= outH) outW -= 1;
 				else outH -= 1;
