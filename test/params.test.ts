@@ -307,9 +307,30 @@ describe("canonical path", () => {
 		const req = parseIIIFPath("0,0,100,100", "^400,400", "0", "default.jpg");
 		expect(canonicalPath(resolve(req, meta), meta)).toBe("0,0,100,100/^400,400/0/default.jpg");
 	});
-	test("a tiny rotation stays in decimal notation", () => {
-		const req = parseIIIFPath("full", "max", "0.0000001", "default.jpg");
-		expect(canonicalPath(resolve(req, meta), meta)).toBe("full/max/0/default.jpg");
+	test.each([
+		["0.0000001", "0.0000001"],
+		["0.0000004", "0.0000004"],
+		["1.23456789", "1.23456789"],
+		["123.456789012345", "123.456789012345"],
+		["22.50", "22.5"],
+		["360", "0"],
+	])("rotation %s canonicalizes to %s without losing the value", (given, want) => {
+		const req = parseIIIFPath("full", "max", given, "default.jpg");
+		expect(canonicalPath(resolve(req, meta), meta)).toBe(`full/max/${want}/default.jpg`);
+	});
+	test("a canonical rotation re-canonicalizes to itself", () => {
+		for (const r of ["0.0000004", "1.23456789", "22.5", "359.999999"]) {
+			const once = canonicalPath(
+				resolve(parseIIIFPath("full", "max", r, "default.jpg"), meta),
+				meta,
+			);
+			const seg = once.split("/")[2] as string;
+			const twice = canonicalPath(
+				resolve(parseIIIFPath("full", "max", seg, "default.jpg"), meta),
+				meta,
+			);
+			expect(twice).toBe(once);
+		}
 	});
 	test("color canonicalizes to default", () => {
 		const req = parseIIIFPath("full", "max", "0", "color.jpg");

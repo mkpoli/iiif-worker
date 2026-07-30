@@ -386,6 +386,25 @@ export function resolve(req: IIIFRequest, meta: ImageMeta): ResolvedRequest {
 }
 
 /**
+ * The rotation syntax admits decimal digits and a point, nothing else, but
+ * `String()` switches to exponent notation below 1e-6. Expanding the exponent
+ * keeps the value intact; rounding to fixed decimals would not, turning a
+ * requested 1.23456789 into a different image at 1.234568.
+ */
+function decimalDegrees(n: number): string {
+	const s = String(n);
+	if (!s.includes("e") && !s.includes("E")) return s;
+	const [mantissa, exponent] = s.split(/[eE]/) as [string, string];
+	const exp = Number(exponent);
+	const point = mantissa.indexOf(".");
+	const digits = mantissa.replace(".", "");
+	const shift = (point === -1 ? mantissa.length : point) + exp;
+	if (shift <= 0) return `0.${"0".repeat(-shift)}${digits}`;
+	if (shift >= digits.length) return digits + "0".repeat(shift - digits.length);
+	return `${digits.slice(0, shift)}.${digits.slice(shift)}`;
+}
+
+/**
  * The canonical form of a request per the spec's Canonical URI Syntax:
  * region as `full` or `x,y,w,h`; size as `max`/`^max` or `w,h` (with `^`
  * when upscaling was requested); rotation without trailing zeros; the
@@ -402,12 +421,7 @@ export function canonicalPath(resolved: ResolvedRequest, meta: ImageMeta): strin
 	const caret = outW > rect.w || outH > rect.h ? "^" : "";
 	const sizeSeg = resolved.sizeIsMax ? `${caret}max` : `${caret}${outW},${outH}`;
 
-	const deg = resolved.rotation.degrees;
-	// Plain decimal digits only: String() switches to exponent notation below
-	// 1e-6, which the rotation syntax does not admit.
-	const degSeg = Number.isInteger(deg)
-		? String(deg)
-		: deg.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+	const degSeg = decimalDegrees(resolved.rotation.degrees);
 	const rotationSeg = `${resolved.rotation.mirror ? "!" : ""}${degSeg}`;
 
 	// `color` is this server's default rendering, so it canonicalizes to
