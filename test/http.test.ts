@@ -130,3 +130,82 @@ describe("conditional requests on images", () => {
 		expect(res.status).toBe(303);
 	});
 });
+
+/**
+ * A Cache with the two methods the Worker uses, so the metadata cache can be
+ * exercised for real rather than through the `caches` global, which does not
+ * exist outside the Workers runtime.
+ */
+function stubCache() {
+	const store = new Map<string, Response>();
+	return {
+		async match(req: Request) {
+			return store.get(req.url)?.clone();
+		},
+		async put(req: Request, res: Response) {
+			store.set(req.url, res.clone());
+		},
+		size: () => store.size,
+		keys: () => [...store.keys()],
+	};
+}
+
+describe("metadata caching", () => {
+	test("a second request for the same identifier does not read R2 again", async () => {
+		const b = bucket();
+		const cache = stubCache();
+		const env = { IMAGES: b.IMAGES, PUBLIC_BASE: "https://x.test/iiif/3" };
+		const { loadMetaForTest } = await import("../src/index");
+		await loadMetaForTest(env, "bk", cache as unknown as Cache);
+		expect(b.calls).toEqual(["bk/meta.json"]);
+		const again = await loadMetaForTest(env, "bk", cache as unknown as Cache);
+		expect(b.calls).toEqual(["bk/meta.json"]);
+		expect(again?.stored.width).toBe(2155);
+		expect(again?.version).toBe("v1");
+	});
+
+	test("an identifier that does not exist is only looked up once", async () => {
+		const calls: string[] = [];
+		const empty = {
+			async get(key: string) {
+				calls.push(key);
+				return null;
+			},
+		} as unknown as R2Bucket;
+		const b = { calls };
+		const cache = stubCache();
+		const env = { IMAGES: empty, PUBLIC_BASE: "https://x.test/iiif/3" };
+		const { loadMetaForTest } = await import("../src/index");
+		expect(await loadMetaForTest(env, "ghost", cache as unknown as Cache)).toBeNull();
+		expect(await loadMetaForTest(env, "ghost", cache as unknown as Cache)).toBeNull();
+		expect(b.calls).toEqual(["ghost/meta.json"]);
+	});
+
+	test("two identifiers do not share an entry", async () => {
+		const b = bucket();
+		const cache = stubCache();
+		const env = { IMAGES: b.IMAGES, PUBLIC_BASE: "https://x.test/iiif/3" };
+		const { loadMetaForTest } = await import("../src/index");
+		await loadMetaForTest(env, "one", cache as unknown as Cache);
+		await loadMetaForTest(env, "two", cache as unknown as Cache);
+		expect(b.calls).toEqual(["one/meta.json", "two/meta.json"]);
+		expect(cache.size()).toBe(2);
+	});
+
+	test("an identifier with a slash gets its own key", async () => {
+		const cache = stubCache();
+		const env = { IMAGES: bucket().IMAGES, PUBLIC_BASE: "https://x.test/iiif/3" };
+		const { loadMetaForTest } = await import("../src/index");
+		await loadMetaForTest(env, "book/0001", cache as unknown as Cache);
+		expect(cache.keys()[0]).toContain("book%2F0001");
+	});
+
+	test("the entry expires rather than pinning stale dimensions forever", async () => {
+		const cache = stubCache();
+		const env = { IMAGES: bucket().IMAGES, PUBLIC_BASE: "https://x.test/iiif/3" };
+		const { loadMetaForTest } = await import("../src/index");
+		await loadMetaForTest(env, "bk", cache as unknown as Cache);
+		const stored = await (cache as unknown as Cache).match(new Request(cache.keys()[0] as string));
+		expect(stored?.headers.get("Cache-Control")).toBe("max-age=60");
+	});
+});
