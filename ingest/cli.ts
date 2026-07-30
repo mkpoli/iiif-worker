@@ -152,7 +152,10 @@ async function main(): Promise<void> {
 			JSON.stringify({ width, height, levels, format: "jpeg" }),
 			"application/json",
 		);
-		const imageBase = `${args.base}/iiif/3/${prefix}`;
+		// A slash inside an identifier is percent-encoded per section 9, so the
+		// manifest's service id matches the id info.json reports for itself.
+		const encodedId = `${encodeURIComponent(args.collection)}%2F${encodeURIComponent(id)}`;
+		const imageBase = `${args.base}/iiif/3/${encodedId}`;
 		canvases.push({
 			id: `${imageBase}/canvas`,
 			type: "Canvas",
