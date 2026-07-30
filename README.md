@@ -67,14 +67,20 @@ Cloudflare between the R2 read and the response.
 | | **iiif-worker** | [Cantaloupe](https://cantaloupe-project.github.io/) | [IIPImage](https://iipimage.sourceforge.io/) | [go-iiif](https://github.com/go-iiif/go-iiif) | [serverless-iiif](https://github.com/samvera/serverless-iiif) | static Level 0 |
 | :-- | :-: | :-: | :-: | :-: | :-: | :-: |
 | Runs on | Cloudflare Workers | your JVM host | your C++ host | your host / Lambda | AWS Lambda | any static host |
-| Image API level | 2 | 2 | 2 | 2 | 2 | 0 |
+| Image API version | 3.0 | 1.0–3.0 | 1–3, defaults 3 | 2.1 | 2.1 + 3.0 | 1.1–3.0 output |
+| Compliance level | 2 | 2 | 2 | 0 and 2 | 2 | 0 |
 | Arbitrary region / size / rotation | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ fixed tiles |
 | Server to keep running | none | JVM | daemon | daemon / Lambda | Lambda | none |
-| Source formats | JPEG · PNG · WebP | + TIFF · JP2 | + TIFF · JP2 | + TIFF | + TIFF · JP2 | pre-rendered |
+| Source formats | JPEG · PNG · WebP | + TIFF · JP2 | + TIFF · JP2 | + TIFF, no JP2 | + TIFF · JP2 | pre-rendered |
+| One tile out of a pyramidal master | ❌ decodes a whole level | ✅ | ✅ | ❌ | ✅ | n/a |
 | Large masters (12 MP+) | ❌ 128 MB isolate cap | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Per-request cost | Workers CPU-ms | fixed host | fixed host | host / CPU-ms | Lambda ms | none |
 | Setup | `wrangler deploy` | install + tune JVM | build + configure | build / package | AWS stack | run a tiler |
 | License | MIT | custom (BSD-like) | GPL | BSD-3 | Apache-2.0 | — |
+
+A wider comparison covering SIPI, Loris, RAIS, digilib, Hymir, Wolpi, iiiris and the
+static tilers, with licences, release dates and colour handling, is in
+[docs/comparison.md](./docs/comparison.md).
 
 Where each other server wins: Cantaloupe, IIPImage, and serverless-iiif read JPEG 2000
 and multi-hundred-megapixel TIFFs directly, which iiif-worker cannot — the isolate has
