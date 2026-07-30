@@ -107,8 +107,6 @@ export interface ResolvedRequest {
 	outH: number;
 	/** The requested size was `max`/`^max`, so the canonical form keeps `max`. */
 	sizeIsMax: boolean;
-	/** The size segment carried the `^` upscaling prefix. */
-	upscale: boolean;
 	rotation: Rotation;
 	quality: Quality;
 	format: Format;
@@ -272,6 +270,46 @@ export function resolveRegion(region: Region, meta: ImageMeta): Rect {
 	return { x: rect.x, y: rect.y, w, h };
 }
 
+/**
+ * A service that declares `maxWidth` without `maxHeight` is declaring the same
+ * ceiling on both axes, so the pair is normalized wherever it is read.
+ * https://iiif.io/api/image/3.0/#52-technical-properties
+ */
+function heightLimit(meta: ImageMeta): number {
+	return meta.maxHeight ?? meta.maxWidth ?? Number.POSITIVE_INFINITY;
+}
+
+/** Largest scale factor for which w×h still satisfies every server ceiling. */
+function limitScale(w: number, h: number, meta: ImageMeta): number {
+	return Math.min(
+		(meta.maxWidth ?? Number.POSITIVE_INFINITY) / w,
+		heightLimit(meta) / h,
+		Math.sqrt((meta.maxArea ?? Number.POSITIVE_INFINITY) / (w * h)),
+	);
+}
+
+/**
+ * The dimensions `max` and `^max` resolve to. `max` fills the server ceilings
+ * without ever enlarging; `^max` scales up to them. With no ceiling configured
+ * there is nothing to scale up to, so `^max` yields the region unchanged.
+ *
+ * The server picks these dimensions itself, so a ceiling small enough to round
+ * an axis to zero clamps to one pixel rather than failing the request.
+ */
+export function maxDimensions(
+	rect: Rect,
+	meta: ImageMeta,
+	upscale: boolean,
+): { outW: number; outH: number } {
+	const raw = limitScale(rect.w, rect.h, meta);
+	const scale = upscale ? raw : Math.min(1, raw);
+	if (!Number.isFinite(scale) || scale === 1) return { outW: rect.w, outH: rect.h };
+	return {
+		outW: Math.max(1, Math.floor(rect.w * scale)),
+		outH: Math.max(1, Math.floor(rect.h * scale)),
+	};
+}
+
 /** Resolve a size against a resolved region, applying spec rules. */
 export function resolveSize(
 	size: Size,
@@ -279,25 +317,14 @@ export function resolveSize(
 	meta: ImageMeta,
 ): { outW: number; outH: number } {
 	const maxW = meta.maxWidth ?? Number.POSITIVE_INFINITY;
-	const maxH = meta.maxHeight ?? Number.POSITIVE_INFINITY;
+	const maxH = heightLimit(meta);
 	const maxArea = meta.maxArea ?? Number.POSITIVE_INFINITY;
-
-	const fitMax = (w: number, h: number): { outW: number; outH: number } => {
-		let outW = w;
-		let outH = h;
-		const scale = Math.min(1, maxW / outW, maxH / outH, Math.sqrt(maxArea / (outW * outH)));
-		if (scale < 1) {
-			outW = Math.floor(outW * scale);
-			outH = Math.floor(outH * scale);
-		}
-		return { outW: Math.max(1, outW), outH: Math.max(1, outH) };
-	};
 
 	let outW: number;
 	let outH: number;
 	switch (size.kind) {
 		case "max": {
-			return fitMax(rect.w, rect.h);
+			return maxDimensions(rect, meta, size.upscale);
 		}
 		case "w":
 			outW = size.w;
@@ -316,14 +343,26 @@ export function resolveSize(
 			outH = size.h;
 			break;
 		case "confined": {
-			const scale = Math.min(size.w / rect.w, size.h / rect.h);
+			// The result is as large as possible while fitting inside the box, the
+			// server ceilings, and — without `^` — the region itself. A box larger
+			// than any of those shrinks the scale rather than failing the request.
+			let scale = Math.min(size.w / rect.w, size.h / rect.h, limitScale(rect.w, rect.h, meta));
+			if (!size.upscale) scale = Math.min(1, scale);
 			outW = Math.round(rect.w * scale);
 			outH = Math.round(rect.h * scale);
+			// Rounding each axis to its nearest pixel can carry the pair back over
+			// maxArea. This form has to fit inside the ceilings rather than fail, so
+			// the longer side gives up pixels until it does.
+			while (outW * outH > maxArea && (outW > 1 || outH > 1)) {
+				if (outW >= outH) outW -= 1;
+				else outH -= 1;
+			}
 			break;
 		}
 	}
-	outW = Math.max(1, outW);
-	outH = Math.max(1, outH);
+	// A client-specified size that scales an axis below one pixel has no image
+	// to return.
+	if (outW < 1 || outH < 1) throw new IIIFError(400, "size rounds to zero pixels");
 	if (!size.upscale && (outW > rect.w || outH > rect.h))
 		throw new IIIFError(400, "size exceeds region; prefix with ^ to allow upscaling");
 	if (outW > maxW || outH > maxH || outW * outH > maxArea)
@@ -340,11 +379,29 @@ export function resolve(req: IIIFRequest, meta: ImageMeta): ResolvedRequest {
 		outW,
 		outH,
 		sizeIsMax: req.size.kind === "max",
-		upscale: req.size.upscale,
 		rotation: req.rotation,
 		quality: req.quality,
 		format: req.format,
 	};
+}
+
+/**
+ * The rotation syntax admits decimal digits and a point, nothing else, but
+ * `String()` switches to exponent notation below 1e-6. Expanding the exponent
+ * keeps the value intact; rounding to fixed decimals would not, turning a
+ * requested 1.23456789 into a different image at 1.234568.
+ */
+function decimalDegrees(n: number): string {
+	const s = String(n);
+	if (!s.includes("e") && !s.includes("E")) return s;
+	const [mantissa, exponent] = s.split(/[eE]/) as [string, string];
+	const exp = Number(exponent);
+	const point = mantissa.indexOf(".");
+	const digits = mantissa.replace(".", "");
+	const shift = (point === -1 ? mantissa.length : point) + exp;
+	if (shift <= 0) return `0.${"0".repeat(-shift)}${digits}`;
+	if (shift >= digits.length) return digits + "0".repeat(shift - digits.length);
+	return `${digits.slice(0, shift)}.${digits.slice(shift)}`;
 }
 
 /**
@@ -359,12 +416,16 @@ export function canonicalPath(resolved: ResolvedRequest, meta: ImageMeta): strin
 		rect.x === 0 && rect.y === 0 && rect.w === meta.width && rect.h === meta.height
 			? "full"
 			: `${rect.x},${rect.y},${rect.w},${rect.h}`;
-	let sizeSeg: string;
-	const caret = resolved.upscale ? "^" : "";
-	if (resolved.sizeIsMax) sizeSeg = `${caret}max`;
-	else sizeSeg = `${caret}${outW},${outH}`;
-	const deg = resolved.rotation.degrees;
-	const degSeg = Number.isInteger(deg) ? String(deg) : String(deg).replace(/0+$/, "");
+	// `^` belongs in the canonical form when the result is genuinely larger than
+	// the region, whatever prefix the client happened to write.
+	const caret = outW > rect.w || outH > rect.h ? "^" : "";
+	const sizeSeg = resolved.sizeIsMax ? `${caret}max` : `${caret}${outW},${outH}`;
+
+	const degSeg = decimalDegrees(resolved.rotation.degrees);
 	const rotationSeg = `${resolved.rotation.mirror ? "!" : ""}${degSeg}`;
-	return `${regionSeg}/${sizeSeg}/${rotationSeg}/${resolved.quality}.${resolved.format}`;
+
+	// `color` is this server's default rendering, so it canonicalizes to
+	// `default`; the other qualities name a distinct rendering and stay.
+	const quality = resolved.quality === "color" ? "default" : resolved.quality;
+	return `${regionSeg}/${sizeSeg}/${rotationSeg}/${quality}.${resolved.format}`;
 }
