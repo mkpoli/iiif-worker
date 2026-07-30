@@ -14,8 +14,11 @@
 	],
 	"vars": {
 		"PUBLIC_BASE": "https://iiif.example.com/iiif/3",
-		// Optional output ceilings; MAX_AREA caps decoded output pixels.
-		"MAX_AREA": "50000000"
+		// Output ceiling. MAX_AREA caps decoded output pixels; a decoded pixel
+		// costs four bytes and an isolate has 128 MB, so raising this far above
+		// the default risks requests failing on memory instead of returning an
+		// image. Unset or non-numeric falls back to the same 12000000.
+		"MAX_AREA": "12000000"
 	},
 	"observability": { "enabled": true },
 	"routes": [

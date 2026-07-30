@@ -15,7 +15,7 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import sharp from "sharp";
 
-const MAX_PIXELS = 24_000_000;
+const MAX_PIXELS = 12_000_000;
 const LEVELS = [1, 2, 4, 8];
 
 interface Args {
@@ -124,7 +124,8 @@ async function main(): Promise<void> {
 		if (width * height > MAX_PIXELS) {
 			console.error(
 				`${file}: ${width}x${height} exceeds ${MAX_PIXELS} pixels; ` +
-					"downsample the master first (the Workers isolate memory ceiling is the reason)",
+					"downsample the master first (a decoded pixel costs four bytes and a " +
+					"Workers isolate has 128 MB)",
 			);
 			process.exit(1);
 		}
