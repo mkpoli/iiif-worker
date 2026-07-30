@@ -93,7 +93,8 @@ viewer will request.
 ## Quick start
 
 You need a [Cloudflare account](https://dash.cloudflare.com/) with Workers and R2, and
-[Bun](https://bun.sh/).
+[Bun](https://bun.sh/). For a fuller walkthrough — no custom domain, what to check,
+and the mistakes that cost an afternoon — see [docs/hosting.md](./docs/hosting.md).
 
 ```bash
 git clone https://github.com/mkpoli/iiif-worker
