@@ -221,6 +221,27 @@ describe("size resolution", () => {
 				maxWidth: 450,
 			}),
 		).toEqual({ outW: 450, outH: 300 }));
+	test("a lone maxWidth caps the height too", () =>
+		expect(
+			resolveSize(
+				{ kind: "max", upscale: true },
+				{ x: 0, y: 0, w: 100, h: 1000 },
+				{
+					width: 100,
+					height: 1000,
+					maxWidth: 500,
+				},
+			),
+		).toEqual({ outW: 50, outH: 500 }));
+	test("a confined fit stays inside maxArea after rounding", () => {
+		// The scale is sqrt(10000/60000), which rounds to 122×82 = 10 004 pixels.
+		const out = resolveSize({ kind: "confined", upscale: true, w: 6000, h: 6000 }, rect, {
+			...small,
+			maxArea: 10_000,
+		});
+		expect(out.outW * out.outH).toBeLessThanOrEqual(10_000);
+		expect(out).toEqual({ outW: 121, outH: 82 });
+	});
 	test("size rounding below one pixel → 400", () =>
 		expect(() => resolveSize({ kind: "pct", upscale: false, n: 0.1 }, rect, small)).toThrow(
 			IIIFError,
@@ -240,6 +261,10 @@ describe("max dimensions", () => {
 		expect(maxDimensions(rect, small, false)).toEqual({ outW: 300, outH: 200 }));
 	test("unbounded ^max is the region", () =>
 		expect(maxDimensions(rect, small, true)).toEqual({ outW: 300, outH: 200 }));
+	test("a lone maxWidth is also the height ceiling", () =>
+		expect(
+			maxDimensions({ x: 0, y: 0, w: 100, h: 1000 }, { ...small, maxWidth: 500 }, true),
+		).toEqual({ outW: 50, outH: 500 }));
 	test("^max fills maxWidth", () =>
 		expect(maxDimensions(rect, { ...small, maxWidth: 1200 }, true)).toEqual({
 			outW: 1200,

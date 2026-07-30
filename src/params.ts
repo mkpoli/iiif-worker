@@ -270,11 +270,20 @@ export function resolveRegion(region: Region, meta: ImageMeta): Rect {
 	return { x: rect.x, y: rect.y, w, h };
 }
 
+/**
+ * A service that declares `maxWidth` without `maxHeight` is declaring the same
+ * ceiling on both axes, so the pair is normalized wherever it is read.
+ * https://iiif.io/api/image/3.0/#52-technical-properties
+ */
+function heightLimit(meta: ImageMeta): number {
+	return meta.maxHeight ?? meta.maxWidth ?? Number.POSITIVE_INFINITY;
+}
+
 /** Largest scale factor for which w×h still satisfies every server ceiling. */
 function limitScale(w: number, h: number, meta: ImageMeta): number {
 	return Math.min(
 		(meta.maxWidth ?? Number.POSITIVE_INFINITY) / w,
-		(meta.maxHeight ?? Number.POSITIVE_INFINITY) / h,
+		heightLimit(meta) / h,
 		Math.sqrt((meta.maxArea ?? Number.POSITIVE_INFINITY) / (w * h)),
 	);
 }
@@ -308,7 +317,7 @@ export function resolveSize(
 	meta: ImageMeta,
 ): { outW: number; outH: number } {
 	const maxW = meta.maxWidth ?? Number.POSITIVE_INFINITY;
-	const maxH = meta.maxHeight ?? Number.POSITIVE_INFINITY;
+	const maxH = heightLimit(meta);
 	const maxArea = meta.maxArea ?? Number.POSITIVE_INFINITY;
 
 	let outW: number;
@@ -341,6 +350,13 @@ export function resolveSize(
 			if (!size.upscale) scale = Math.min(1, scale);
 			outW = Math.round(rect.w * scale);
 			outH = Math.round(rect.h * scale);
+			// Rounding each axis to its nearest pixel can carry the pair back over
+			// maxArea. This form has to fit inside the ceilings rather than fail, so
+			// the longer side gives up pixels until it does.
+			while (outW * outH > maxArea && (outW > 1 || outH > 1)) {
+				if (outW >= outH) outW -= 1;
+				else outH -= 1;
+			}
 			break;
 		}
 	}
