@@ -226,11 +226,12 @@ describe("size resolution", () => {
 		expect(
 			resolveSize({ kind: "max", upscale: true }, rect, { ...small, maxArea: 240_000 }),
 		).toEqual({ outW: 600, outH: 400 }));
-	test("confined box larger than region fits the region", () =>
-		expect(resolveSize({ kind: "confined", upscale: false, w: 600, h: 600 }, rect, small)).toEqual({
-			outW: 300,
-			outH: 200,
-		}));
+	test("confined box larger than region needs ^", () =>
+		// The official validator's size_noup test requires this: a box above 100%
+		// is an upscale request whatever the size form.
+		expect(() =>
+			resolveSize({ kind: "confined", upscale: false, w: 600, h: 600 }, rect, small),
+		).toThrow(IIIFError));
 	test("^confined box larger than region upscales", () =>
 		expect(resolveSize({ kind: "confined", upscale: true, w: 600, h: 600 }, rect, small)).toEqual({
 			outW: 600,
