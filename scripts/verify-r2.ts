@@ -4,12 +4,13 @@
  *
  *   bun run scripts/verify-r2.ts /tmp/iiif-r2-prod https://iiif.example.org --bucket iiif-images [--fix]
  *
- * A prefix is complete when its meta.json loads through the Worker and every
- * level listed there returns 200 for a 1-pixel probe. Verification runs
- * through the public endpoint, so it checks what viewers actually see.
+ * A prefix is complete when its info.json loads through the Worker and every
+ * level listed in meta.json answers an image request that resolves to it.
+ * Verification runs through the public endpoint, so it checks what viewers
+ * actually see.
  */
 
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 const [root, base] = process.argv.slice(2);
@@ -21,6 +22,29 @@ if (!root || !base) {
 		"usage: bun run scripts/verify-r2.ts <local-tree> <public-base> [--bucket name] [--fix]",
 	);
 	process.exit(1);
+}
+
+/**
+ * A prefix is only complete when every level named in its meta.json answers. A
+ * 64-px window of a 64f-px region resolves to exactly level f, and the output
+ * stays small enough to pass any configured size ceiling.
+ */
+async function levelsRespond(publicBase: string, enc: string, dir: string): Promise<boolean> {
+	let meta: { width: number; levels: number[] };
+	try {
+		meta = JSON.parse(await readFile(join(dir, "meta.json"), "utf8"));
+	} catch {
+		return false;
+	}
+	for (const f of meta.levels) {
+		const side = 64 * f;
+		const res = await fetch(`${publicBase}/iiif/3/${enc}/0,0,${side},${side}/64,64/0/default.jpg`, {
+			redirect: "follow",
+		});
+		if (res.status !== 200) return false;
+		await res.arrayBuffer();
+	}
+	return true;
 }
 
 async function put(key: string, file: string, contentType: string): Promise<boolean> {
@@ -62,7 +86,7 @@ for (const coll of collections) {
 	for (const id of ids) {
 		const enc = `${encodeURIComponent(coll)}%2F${encodeURIComponent(id)}`;
 		const res = await fetch(`${base}/iiif/3/${enc}/info.json`);
-		if (res.status === 200) continue;
+		if (res.status === 200 && (await levelsRespond(base, enc, join(root, coll, id)))) continue;
 		missing += 1;
 		if (!fix) {
 			console.log(`MISSING ${coll}/${id} (info.json ${res.status})`);

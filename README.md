@@ -7,7 +7,7 @@
 [![MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers/)
 [![IIIF Image API 3.0](https://img.shields.io/badge/IIIF-Image_API_3.0_Level_2-1a3b5d)](https://iiif.io/api/image/3.0/)
-[![tests](https://img.shields.io/badge/tests-70_passing-success?logo=bun&logoColor=white)](#how-it-was-tested)
+[![tests](https://img.shields.io/badge/tests-106_passing-success?logo=bun&logoColor=white)](#how-it-was-tested)
 
 </div>
 
@@ -42,7 +42,9 @@ job on AWS, but its image work is native libvips, which a Workers isolate cannot
     prefix for upscaling
   - **rotation** — any degree, plus `!` mirroring
   - **quality** — `default`, `color`, `gray`, `bitonal`
-  - **format** — `jpg`, `png`, `webp`
+  - **format** — `jpg`, `png`, `webp`; `tif`, `gif`, `pdf` and `jp2` are answered
+    501, which tells a client the request was understood and the format is not
+    produced here
   - canonical-URI redirects, a `profile` link header, CORS, and long-lived immutable
     caching
 - **`info.json`** as an `ImageService3` document with `sizes`, `tiles`, and the
@@ -54,9 +56,10 @@ job on AWS, but its image work is native libvips, which a Workers isolate cannot
   covers the output, so cost tracks the size asked for rather than the size of the
   master.
 
-Image decoding, cropping, resizing, and rotation run in WebAssembly
+Image decoding, cropping, resizing, and encoding run in WebAssembly
 ([@cf-wasm/photon](https://github.com/fineshopdesign/cf-wasm), a Workers build of
-[photon-rs](https://github.com/silvia-odwyer/photon)) inside the isolate. Nothing leaves
+[photon-rs](https://github.com/silvia-odwyer/photon)) inside the isolate. Rotation is the
+exception and runs on the raw pixel buffer; see the design notes. Nothing leaves
 Cloudflare between the R2 read and the response.
 
 ## How it compares
@@ -64,14 +67,20 @@ Cloudflare between the R2 read and the response.
 | | **iiif-worker** | [Cantaloupe](https://cantaloupe-project.github.io/) | [IIPImage](https://iipimage.sourceforge.io/) | [go-iiif](https://github.com/go-iiif/go-iiif) | [serverless-iiif](https://github.com/samvera/serverless-iiif) | static Level 0 |
 | :-- | :-: | :-: | :-: | :-: | :-: | :-: |
 | Runs on | Cloudflare Workers | your JVM host | your C++ host | your host / Lambda | AWS Lambda | any static host |
-| Image API level | 2 | 2 | 2 | 2 | 2 | 0 |
+| Image API version | 3.0 | 1.0–3.0 | 1–3, defaults 3 | 2.1 | 2.1 + 3.0 | 1.1–3.0 output |
+| Compliance level | 2 | 2 | 2 | 0 and 2 | 2 | 0 |
 | Arbitrary region / size / rotation | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ fixed tiles |
 | Server to keep running | none | JVM | daemon | daemon / Lambda | Lambda | none |
-| Source formats | JPEG · PNG · WebP | + TIFF · JP2 | + TIFF · JP2 | + TIFF | + TIFF · JP2 | pre-rendered |
-| Very large masters (100 MP+) | ❌ 128 MB isolate cap | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Source formats | JPEG · PNG · WebP | + TIFF · JP2 | + TIFF · JP2 | + TIFF, no JP2 | + TIFF · JP2 | pre-rendered |
+| One tile out of a pyramidal master | ❌ decodes a whole level | ✅ | ✅ | ❌ | ✅ | n/a |
+| Large masters (12 MP+) | ❌ 128 MB isolate cap | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Per-request cost | Workers CPU-ms | fixed host | fixed host | host / CPU-ms | Lambda ms | none |
 | Setup | `wrangler deploy` | install + tune JVM | build + configure | build / package | AWS stack | run a tiler |
 | License | MIT | custom (BSD-like) | GPL | BSD-3 | Apache-2.0 | — |
+
+A wider comparison covering SIPI, Loris, RAIS, digilib, Hymir, Wolpi, iiiris and the
+static tilers, with licences, release dates and colour handling, is in
+[docs/comparison.md](./docs/comparison.md).
 
 Where each other server wins: Cantaloupe, IIPImage, and serverless-iiif read JPEG 2000
 and multi-hundred-megapixel TIFFs directly, which iiif-worker cannot — the isolate has
@@ -112,9 +121,13 @@ Ingest a folder of images. Each becomes a IIIF image identified by
 
 ```bash
 export INGEST_TOKEN=<the token from above>
-bun run ingest/cli.ts ./scans --collection my-book --base https://iiif.example.com
+bun run ingest/cli.ts ./scans --collection my-book --base https://iiif.example.com --local ./out
 bun run scripts/push-tree.ts ./out https://iiif.example.com --verify
 ```
+
+`--local ./out` builds the pyramid into a local directory; `push-tree.ts` then
+uploads it through the Worker. Drop `--local` to have the CLI upload each object
+itself with `wrangler r2 object put` as it goes.
 
 Now `https://iiif.example.com/iiif/3/my-book/0001/info.json` answers, and a viewer
 pointed at it can pan and zoom the whole book from
@@ -134,7 +147,7 @@ collections/{collection}/manifest.json IIIF Presentation 3 manifest
 
 ## How it was tested
 
-- **70 unit tests** (`bun test`) over the request parser and the region/size math,
+- **106 unit tests** (`bun test`) over the request parser and the region/size math,
   built from the IIIF 3.0 syntax tables — the malformed-input cases the spec calls out,
   the canonical-form rewrites, and the upscaling rules.
 - **The official [IIIF Image API validator](https://pypi.org/project/iiif-validator/)**
@@ -174,15 +187,31 @@ pixel crop in the Worker first — which is the part photon already does. The bi
 would have added a dependency and a second code path without removing the wasm decode,
 so the server does all image work through photon.
 
-**Memory, not CPU, is the ceiling.** A Workers isolate has 128 MB. Decoding a JPEG to
-RGBA costs about four bytes per pixel, so a ~24 MP master is the practical top end; the
-ingest CLI refuses larger sources and asks you to downsample first. Reading from a small
-pyramid level keeps most requests well under that, and keeps them fast.
+**Memory is the ceiling, ahead of CPU.** A Workers isolate has 128 MB and decoding a
+JPEG to RGBA costs about four bytes per pixel. A full-size request holds the decoded
+level and the transformed copy at once, which puts the practical top end near 12 MP; the
+ingest CLI refuses larger sources and asks you to downsample first, and `MAX_AREA`
+applies the same ceiling to the output side so no request can ask for more than the
+isolate can hold. Reading from a small pyramid level keeps most requests well under
+that, and keeps them fast.
+
+**Rotation is not photon's.** `@cf-wasm/photon` 0.3.7 ships a `rotate` that corrupts the
+buffer: a 60×40 solid fill comes back with 2399 of its 2400 pixels altered, at every
+angle, and the canvas it returns is far larger than the rotated content needs. Rotation
+therefore runs over the raw RGBA bytes — right angles as an exact reindexing, other
+angles bilinear onto the minimal bounding box, with the uncovered corners transparent
+for PNG and WebP and white for JPEG. The area ceiling applies to that bounding box
+rather than to the pre-rotation size, so a tilted full-page request cannot outgrow the
+isolate.
 
 **Caching.** Every rendered response is stored in the Workers Cache API under its
 canonical URL and carries `Cache-Control: public, max-age=31536000, immutable`.
 Non-canonical request forms (say `pct:` regions, or `w,` sizes) 303-redirect to the
-canonical URL first, so the cache stays single-keyed per distinct image.
+canonical URL first, so the cache stays single-keyed per distinct image; those redirects
+carry the same long lifetime, so a viewer that speaks its own dialect pays the hop once
+instead of once per tile. An explicit `w,h` is served as written even when it equals the
+region — collapsing it to `max` would redirect every tile a viewer requests at native
+resolution, which is the most common request there is.
 
 ## License
 

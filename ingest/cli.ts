@@ -15,7 +15,7 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import sharp from "sharp";
 
-const MAX_PIXELS = 24_000_000;
+const MAX_PIXELS = 12_000_000;
 const LEVELS = [1, 2, 4, 8];
 
 interface Args {
@@ -114,14 +114,18 @@ async function main(): Promise<void> {
 	for (const file of files) {
 		const id = basename(file, extname(file));
 		const prefix = `${args.collection}/${id}`;
-		const src = sharp(join(args.folder, file), { failOn: "error" });
+		// `.rotate()` with no argument applies the EXIF orientation. Without it a
+		// phone photo or scanner output lands sideways and the tag is dropped on
+		// re-encode, leaving no way for a client to correct it.
+		const src = sharp(join(args.folder, file), { failOn: "error" }).rotate();
 		const meta = await src.metadata();
-		const width = meta.width ?? 0;
-		const height = meta.height ?? 0;
+		const width = meta.autoOrient?.width ?? meta.width ?? 0;
+		const height = meta.autoOrient?.height ?? meta.height ?? 0;
 		if (width * height > MAX_PIXELS) {
 			console.error(
 				`${file}: ${width}x${height} exceeds ${MAX_PIXELS} pixels; ` +
-					"downsample the master first (the Workers isolate memory ceiling is the reason)",
+					"downsample the master first (a decoded pixel costs four bytes and a " +
+					"Workers isolate has 128 MB)",
 			);
 			process.exit(1);
 		}
@@ -129,7 +133,9 @@ async function main(): Promise<void> {
 		for (const f of LEVELS) {
 			const w = Math.floor(width / f);
 			const h = Math.floor(height / f);
-			if (w < 64 || h < 64) break;
+			// L1 is the master and is always written; the reductions stop once they
+			// would be too small to be worth a separate object.
+			if (f !== 1 && (w < 64 || h < 64)) break;
 			levels.push(f);
 			const buf =
 				f === 1
@@ -147,7 +153,10 @@ async function main(): Promise<void> {
 			JSON.stringify({ width, height, levels, format: "jpeg" }),
 			"application/json",
 		);
-		const imageBase = `${args.base}/iiif/3/${prefix}`;
+		// A slash inside an identifier is percent-encoded per section 9, so the
+		// manifest's service id matches the id info.json reports for itself.
+		const encodedId = `${encodeURIComponent(args.collection)}%2F${encodeURIComponent(id)}`;
+		const imageBase = `${args.base}/iiif/3/${encodedId}`;
 		canvases.push({
 			id: `${imageBase}/canvas`,
 			type: "Canvas",

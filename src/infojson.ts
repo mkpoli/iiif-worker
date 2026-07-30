@@ -19,16 +19,21 @@ export function buildInfoJson(o: InfoOptions): Record<string, unknown> {
 	const maxW = meta.maxWidth ?? Number.POSITIVE_INFINITY;
 	const maxH = meta.maxHeight ?? Number.POSITIVE_INFINITY;
 	const maxArea = meta.maxArea ?? Number.POSITIVE_INFINITY;
-	// Every entry in `sizes` is a size the server will serve, so anything a
-	// configured ceiling would reject is left out rather than advertised.
+	// Everything advertised has to be something the server will actually serve.
+	// The height follows the width through the same arithmetic resolveSize uses,
+	// so a client requesting an advertised width gets back the pair listed here,
+	// and anything a configured ceiling would reject is left out.
 	const sizes = o.scaleFactors
 		.slice()
 		.sort((a, b) => b - a)
-		.map((f) => ({
-			width: Math.floor(meta.width / f),
-			height: Math.floor(meta.height / f),
-		}))
+		.map((f) => {
+			const width = Math.max(1, Math.floor(meta.width / f));
+			return { width, height: Math.max(1, Math.round((meta.height / meta.width) * width)) };
+		})
 		.filter((s) => s.width <= maxW && s.height <= maxH && s.width * s.height <= maxArea);
+	// Section 5.2 requires advertised tiles to sit inside the limits too, so the
+	// tile shrinks rather than naming a size the server would reject.
+	const tile = Math.max(1, Math.min(tileSize, maxW, maxH, Math.floor(Math.sqrt(maxArea))));
 	const doc: Record<string, unknown> = {
 		"@context": "http://iiif.io/api/image/3/context.json",
 		id: o.id,
@@ -43,11 +48,12 @@ export function buildInfoJson(o: InfoOptions): Record<string, unknown> {
 		sizes,
 		tiles: [
 			{
-				width: tileSize,
-				height: tileSize,
+				width: tile,
+				height: tile,
 				scaleFactors: o.scaleFactors.slice().sort((a, b) => a - b),
 			},
 		],
+		preferredFormats: ["jpg"],
 		extraQualities: ["color", "gray", "bitonal"],
 		extraFormats: ["webp"],
 		extraFeatures: [

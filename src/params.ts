@@ -83,6 +83,12 @@ export type Quality = (typeof QUALITIES)[number];
 export const FORMATS = ["jpg", "png", "webp"] as const;
 export type Format = (typeof FORMATS)[number];
 
+/**
+ * Formats the specification defines that this server does not produce. They are
+ * valid requests, so they earn 501 rather than the 400 that means "malformed".
+ */
+const UNIMPLEMENTED_FORMATS = ["tif", "gif", "pdf", "jp2"] as const;
+
 export interface IIIFRequest {
 	region: Region;
 	size: Size;
@@ -212,7 +218,11 @@ export function parseQualityFormat(segment: string): {
 	const quality = segment.slice(0, dot) as Quality;
 	const format = segment.slice(dot + 1) as Format;
 	if (!QUALITIES.includes(quality)) throw new IIIFError(400, `unknown quality: ${quality}`);
-	if (!FORMATS.includes(format)) throw new IIIFError(400, `unsupported format: ${format}`);
+	if (!FORMATS.includes(format)) {
+		if ((UNIMPLEMENTED_FORMATS as readonly string[]).includes(format))
+			throw new IIIFError(501, `format not implemented: ${format}`);
+		throw new IIIFError(400, `unknown format: ${format}`);
+	}
 	return { quality, format };
 }
 
@@ -250,9 +260,11 @@ export function resolveRegion(region: Region, meta: ImageMeta): Rect {
 			break;
 		}
 		case "pct":
+			// The origin floors so a region beginning inside the final pixel column
+			// still starts inside the image; only the extent rounds.
 			rect = {
-				x: Math.round((region.x / 100) * width),
-				y: Math.round((region.y / 100) * height),
+				x: Math.floor((region.x / 100) * width),
+				y: Math.floor((region.y / 100) * height),
 				w: Math.round((region.w / 100) * width),
 				h: Math.round((region.h / 100) * height),
 			};
@@ -374,6 +386,17 @@ export function resolveSize(
 export function resolve(req: IIIFRequest, meta: ImageMeta): ResolvedRequest {
 	const rect = resolveRegion(req.region, meta);
 	const { outW, outH } = resolveSize(req.size, rect, meta);
+	// Rotation by anything other than a right angle returns a canvas large
+	// enough to hold the tilted rectangle, and that canvas is what has to fit in
+	// memory, so the area ceiling applies to it rather than to the pre-rotation
+	// size a client asked for.
+	const deg = req.rotation.degrees;
+	if (deg % 90 !== 0 && meta.maxArea !== undefined) {
+		const rad = (deg * Math.PI) / 180;
+		const bw = Math.abs(outW * Math.cos(rad)) + Math.abs(outH * Math.sin(rad));
+		const bh = Math.abs(outW * Math.sin(rad)) + Math.abs(outH * Math.cos(rad));
+		if (bw * bh > meta.maxArea) throw new IIIFError(400, "rotated size exceeds server limits");
+	}
 	return {
 		rect,
 		outW,
