@@ -132,7 +132,9 @@ async function main(): Promise<void> {
 		for (const f of LEVELS) {
 			const w = Math.floor(width / f);
 			const h = Math.floor(height / f);
-			if (w < 64 || h < 64) break;
+			// L1 is the master and is always written; the reductions stop once they
+			// would be too small to be worth a separate object.
+			if (f !== 1 && (w < 64 || h < 64)) break;
 			levels.push(f);
 			const buf =
 				f === 1
