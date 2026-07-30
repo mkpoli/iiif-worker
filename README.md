@@ -7,7 +7,7 @@
 [![MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers/)
 [![IIIF Image API 3.0](https://img.shields.io/badge/IIIF-Image_API_3.0_Level_2-1a3b5d)](https://iiif.io/api/image/3.0/)
-[![tests](https://img.shields.io/badge/tests-106_passing-success?logo=bun&logoColor=white)](#how-it-was-tested)
+[![tests](https://img.shields.io/badge/tests-115_passing-success?logo=bun&logoColor=white)](#how-it-was-tested)
 
 </div>
 
@@ -147,18 +147,21 @@ collections/{collection}/manifest.json IIIF Presentation 3 manifest
 
 ## How it was tested
 
-- **106 unit tests** (`bun test`) over the request parser and the region/size math,
-  built from the IIIF 3.0 syntax tables — the malformed-input cases the spec calls out,
-  the canonical-form rewrites, and the upscaling rules.
+- **115 unit tests** (`bun test`) over the request parser, the region/size math, the
+  pyramid level mapping and rotation, built from the IIIF 3.0 syntax tables — the
+  malformed-input cases the spec calls out, the canonical-form rewrites, and the
+  upscaling rules.
 - **The official [IIIF Image API validator](https://pypi.org/project/iiif-validator/)**
-  against a deployed instance serving the validator's own reference image: **22 of 24
-  checks pass**. The two that do not are `baseurl_redirect` and `jsonld`; both send a
-  bare `urllib` request with no browser `User-Agent`, which Cloudflare's default
-  bot protection answers with a 403 before the request reaches the Worker. With any
-  ordinary client the base-URI redirect and the `application/ld+json` content type are
-  both correct — the same two checks pass through a browser or `curl`. This is a
-  property of the zone's security settings, not of the server; a zone without bot
-  challenges passes all 24.
+  at Image API 3.0 level 2: **33 tests, 0 failures**. Reproduce it with
+  `bun run validation-image`, which builds the validator's own reference image and
+  loads it into the local R2 simulator; the commands are in
+  [`scripts/validation-image.ts`](./scripts/validation-image.ts).
+
+  Run it against a local `wrangler dev` rather than a deployed instance. The validator
+  sends bare `urllib` requests with no browser `User-Agent`, and a Cloudflare zone with
+  default bot protection answers those with a 403 before they reach the Worker, which
+  shows up as `baseurl_redirect` and `jsonld` failing for reasons that have nothing to
+  do with the server.
 
 ## Timing
 
