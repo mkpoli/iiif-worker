@@ -200,6 +200,22 @@ describe("metadata caching", () => {
 		expect(cache.keys()[0]).toContain("book%2F0001");
 	});
 
+	test.each([
+		[".", ".."],
+		["..", "../.."],
+		["a", "./a"],
+		["", "."],
+	])("identifiers %p and %p never share a cache entry", async (one, two) => {
+		// A path-shaped key would collapse these through dot-segment
+		// normalization and let one identifier read the other's metadata.
+		const cache = stubCache();
+		const env = { IMAGES: bucket().IMAGES, PUBLIC_BASE: "https://x.test/iiif/3" };
+		const { loadMetaForTest } = await import("../src/index");
+		await loadMetaForTest(env, one, cache as unknown as Cache);
+		await loadMetaForTest(env, two, cache as unknown as Cache);
+		expect(cache.size()).toBe(2);
+	});
+
 	test("the entry expires rather than pinning stale dimensions forever", async () => {
 		const cache = stubCache();
 		const env = { IMAGES: bucket().IMAGES, PUBLIC_BASE: "https://x.test/iiif/3" };

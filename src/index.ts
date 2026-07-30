@@ -85,9 +85,13 @@ const META_TTL_SECONDS = 60;
 const ABSENT = "absent";
 
 function metaCacheKey(identifier: string): Request {
-	// A synthetic key, never a URL anything can reach. The scheme and host are
-	// fixed so it cannot collide with a rendered image.
-	return new Request(`https://metadata.iiif-worker.internal/${encodeURIComponent(identifier)}`);
+	// A synthetic key, never a URL anything can reach. The identifier goes in the
+	// query rather than the path: a path is subject to dot-segment
+	// normalization, which collapses `.` and `..` onto the same URL and would
+	// let two identifiers share one entry. A query string is left alone.
+	const key = new URL("https://metadata.iiif-worker.internal/");
+	key.searchParams.set("id", identifier);
+	return new Request(key.toString());
 }
 
 async function loadMeta(
