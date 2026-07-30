@@ -101,9 +101,24 @@ describe("quality/format parsing", () => {
 			format: f,
 		}),
 	);
-	test.each(["default", "default.tif", "default.gif", "native.jpg", "grey.jpg"])(
-		"unsupported %s → 400",
-		(s) => expect(() => parseQualityFormat(s)).toThrow(IIIFError),
+	test.each(["default", "default.xyz", "native.jpg", "grey.jpg"])("malformed %s → 400", (s) => {
+		try {
+			parseQualityFormat(s);
+			throw new Error("expected a throw");
+		} catch (e) {
+			expect((e as IIIFError).status).toBe(400);
+		}
+	});
+	test.each(["default.tif", "default.gif", "default.pdf", "default.jp2"])(
+		"a format the spec defines but this server lacks → 501",
+		(s) => {
+			try {
+				parseQualityFormat(s);
+				throw new Error("expected a throw");
+			} catch (e) {
+				expect((e as IIIFError).status).toBe(501);
+			}
+		},
 	);
 });
 

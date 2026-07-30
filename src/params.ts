@@ -83,6 +83,12 @@ export type Quality = (typeof QUALITIES)[number];
 export const FORMATS = ["jpg", "png", "webp"] as const;
 export type Format = (typeof FORMATS)[number];
 
+/**
+ * Formats the specification defines that this server does not produce. They are
+ * valid requests, so they earn 501 rather than the 400 that means "malformed".
+ */
+const UNIMPLEMENTED_FORMATS = ["tif", "gif", "pdf", "jp2"] as const;
+
 export interface IIIFRequest {
 	region: Region;
 	size: Size;
@@ -212,7 +218,11 @@ export function parseQualityFormat(segment: string): {
 	const quality = segment.slice(0, dot) as Quality;
 	const format = segment.slice(dot + 1) as Format;
 	if (!QUALITIES.includes(quality)) throw new IIIFError(400, `unknown quality: ${quality}`);
-	if (!FORMATS.includes(format)) throw new IIIFError(400, `unsupported format: ${format}`);
+	if (!FORMATS.includes(format)) {
+		if ((UNIMPLEMENTED_FORMATS as readonly string[]).includes(format))
+			throw new IIIFError(501, `format not implemented: ${format}`);
+		throw new IIIFError(400, `unknown format: ${format}`);
+	}
 	return { quality, format };
 }
 
