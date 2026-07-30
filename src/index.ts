@@ -28,6 +28,10 @@ const app = new Hono<{ Bindings: Bindings }>();
 const CORS = {
 	"Access-Control-Allow-Origin": "*",
 	"Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+	"Access-Control-Allow-Headers": "Accept, Content-Type, Range",
+	// Without this the canonical and profile links are invisible to browser JS,
+	// which is the only reason a client would read them.
+	"Access-Control-Expose-Headers": "Link, Content-Length, Content-Type",
 } as const;
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
