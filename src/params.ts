@@ -107,8 +107,6 @@ export interface ResolvedRequest {
 	outH: number;
 	/** The requested size was `max`/`^max`, so the canonical form keeps `max`. */
 	sizeIsMax: boolean;
-	/** The size segment carried the `^` upscaling prefix. */
-	upscale: boolean;
 	rotation: Rotation;
 	quality: Quality;
 	format: Format;
@@ -365,7 +363,6 @@ export function resolve(req: IIIFRequest, meta: ImageMeta): ResolvedRequest {
 		outW,
 		outH,
 		sizeIsMax: req.size.kind === "max",
-		upscale: req.size.upscale,
 		rotation: req.rotation,
 		quality: req.quality,
 		format: req.format,
@@ -384,12 +381,21 @@ export function canonicalPath(resolved: ResolvedRequest, meta: ImageMeta): strin
 		rect.x === 0 && rect.y === 0 && rect.w === meta.width && rect.h === meta.height
 			? "full"
 			: `${rect.x},${rect.y},${rect.w},${rect.h}`;
-	let sizeSeg: string;
-	const caret = resolved.upscale ? "^" : "";
-	if (resolved.sizeIsMax) sizeSeg = `${caret}max`;
-	else sizeSeg = `${caret}${outW},${outH}`;
+	// `^` belongs in the canonical form when the result is genuinely larger than
+	// the region, whatever prefix the client happened to write.
+	const caret = outW > rect.w || outH > rect.h ? "^" : "";
+	const sizeSeg = resolved.sizeIsMax ? `${caret}max` : `${caret}${outW},${outH}`;
+
 	const deg = resolved.rotation.degrees;
-	const degSeg = Number.isInteger(deg) ? String(deg) : String(deg).replace(/0+$/, "");
+	// Plain decimal digits only: String() switches to exponent notation below
+	// 1e-6, which the rotation syntax does not admit.
+	const degSeg = Number.isInteger(deg)
+		? String(deg)
+		: deg.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 	const rotationSeg = `${resolved.rotation.mirror ? "!" : ""}${degSeg}`;
-	return `${regionSeg}/${sizeSeg}/${rotationSeg}/${resolved.quality}.${resolved.format}`;
+
+	// `color` is this server's default rendering, so it canonicalizes to
+	// `default`; the other qualities name a distinct rendering and stay.
+	const quality = resolved.quality === "color" ? "default" : resolved.quality;
+	return `${regionSeg}/${sizeSeg}/${rotationSeg}/${quality}.${resolved.format}`;
 }

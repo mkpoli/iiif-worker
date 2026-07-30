@@ -268,6 +268,32 @@ describe("canonical path", () => {
 		const r = resolve(req, meta);
 		expect(canonicalPath(r, meta)).toBe("full/431,690/0/default.jpg");
 	});
+	test("an explicit size keeps its explicit form", () => {
+		// Collapsing this to `max` would 303 every tile a viewer asks for at
+		// native resolution, so the requested spelling is served as given.
+		const req = parseIIIFPath("full", "2155,3452", "0", "default.jpg");
+		expect(canonicalPath(resolve(req, meta), meta)).toBe("full/2155,3452/0/default.jpg");
+	});
+	test("^ is dropped when nothing is upscaled", () => {
+		const req = parseIIIFPath("full", "^431,", "0", "default.jpg");
+		expect(canonicalPath(resolve(req, meta), meta)).toBe("full/431,690/0/default.jpg");
+	});
+	test("^ is kept when the region is enlarged", () => {
+		const req = parseIIIFPath("0,0,100,100", "^400,400", "0", "default.jpg");
+		expect(canonicalPath(resolve(req, meta), meta)).toBe("0,0,100,100/^400,400/0/default.jpg");
+	});
+	test("a tiny rotation stays in decimal notation", () => {
+		const req = parseIIIFPath("full", "max", "0.0000001", "default.jpg");
+		expect(canonicalPath(resolve(req, meta), meta)).toBe("full/max/0/default.jpg");
+	});
+	test("color canonicalizes to default", () => {
+		const req = parseIIIFPath("full", "max", "0", "color.jpg");
+		expect(canonicalPath(resolve(req, meta), meta)).toBe("full/max/0/default.jpg");
+	});
+	test("gray keeps its own rendering", () => {
+		const req = parseIIIFPath("full", "max", "0", "gray.jpg");
+		expect(canonicalPath(resolve(req, meta), meta)).toBe("full/max/0/gray.jpg");
+	});
 	test("mirror + arbitrary rotation preserved", () => {
 		const req = parseIIIFPath("square", "!400,400", "!22.5", "gray.png");
 		const r = resolve(req, meta);
