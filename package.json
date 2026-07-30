@@ -11,7 +11,8 @@
 		"fix": "biome check --write src ingest test bench",
 		"test": "bun test",
 		"types": "wrangler types",
-		"ingest": "bun run ingest/cli.ts"
+		"ingest": "bun run ingest/cli.ts",
+		"validation-image": "bun run scripts/validation-image.ts"
 	},
 	"dependencies": {
 		"@cf-wasm/photon": "^0.3.7",
