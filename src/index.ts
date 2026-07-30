@@ -28,6 +28,10 @@ const app = new Hono<{ Bindings: Bindings }>();
 const CORS = {
 	"Access-Control-Allow-Origin": "*",
 	"Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+	"Access-Control-Allow-Headers": "Accept, Content-Type, Range",
+	// Without this the canonical and profile links are invisible to browser JS,
+	// which is the only reason a client would read them.
+	"Access-Control-Expose-Headers": "Link, Content-Length, Content-Type",
 } as const;
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
@@ -82,7 +86,13 @@ function jsonError(status: number, message: string): Response {
 
 /** A 303 to the canonical location, carrying CORS so browsers can follow it. */
 function seeOther(location: string): Response {
-	return new Response(null, { status: 303, headers: { ...CORS, Location: location } });
+	// The mapping from a request spelling to its canonical form never changes,
+	// so a viewer that keeps asking in its own dialect pays for the hop once
+	// rather than once per tile.
+	return new Response(null, {
+		status: 303,
+		headers: { ...CORS, Location: location, "Cache-Control": IMMUTABLE },
+	});
 }
 
 app.options("*", (c) => c.body(null, 204, { ...CORS }));
@@ -119,7 +129,25 @@ function encodeId(id: string): string {
 	return id.split("/").map(encodeURIComponent).join("%2F");
 }
 
-async function infoResponse(env: Bindings, id: string): Promise<Response> {
+const LD_JSON = 'application/ld+json;profile="http://iiif.io/api/image/3/context.json"';
+
+/**
+ * Section 5.1 asks for JSON-LD by default and for content negotiation when the
+ * client states a preference, so a client that asks only for `application/json`
+ * gets plain JSON rather than a media type it said it would not take.
+ */
+function infoContentType(accept: string | undefined): string {
+	if (!accept) return LD_JSON;
+	if (accept.includes("application/ld+json")) return LD_JSON;
+	if (accept.includes("application/json")) return "application/json";
+	return LD_JSON;
+}
+
+async function infoResponse(
+	env: Bindings,
+	id: string,
+	accept: string | undefined,
+): Promise<Response> {
 	const loaded = await loadMeta(env, id);
 	if (!loaded) return jsonError(404, "unknown identifier");
 	const { stored } = loaded;
@@ -132,7 +160,8 @@ async function infoResponse(env: Bindings, id: string): Promise<Response> {
 		status: 200,
 		headers: {
 			...CORS,
-			"Content-Type": 'application/ld+json;profile="http://iiif.io/api/image/3/context.json"',
+			"Content-Type": infoContentType(accept),
+			Vary: "Accept",
 			"Cache-Control": "public, max-age=86400",
 		},
 	});
@@ -222,7 +251,7 @@ app.get("/iiif/3/*", async (c) => {
 
 		if (rest.at(-1) === "info.json") {
 			if (rest.length < 2) return jsonError(404, "missing identifier");
-			return await infoResponse(c.env, decodeId(rest.slice(0, -1)));
+			return await infoResponse(c.env, decodeId(rest.slice(0, -1)), c.req.header("Accept"));
 		}
 
 		// An image request is an identifier plus region/size/rotation/quality.format,

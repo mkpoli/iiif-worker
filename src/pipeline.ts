@@ -10,7 +10,6 @@ import {
 	grayscale,
 	PhotonImage,
 	resize,
-	rotate,
 	SamplingFilter,
 	threshold,
 } from "@cf-wasm/photon";
@@ -63,6 +62,98 @@ export function chooseLevel(resolved: ResolvedRequest, stored: StoredMeta): Leve
 	return { factor: chosen, key: `L${chosen}`, rect: scaled };
 }
 
+/** Opaque white, for formats that cannot carry the corners rotation leaves empty. */
+export const WHITE: Pixel = [255, 255, 255, 255];
+/** Transparent, for formats that can. */
+export const CLEAR: Pixel = [0, 0, 0, 0];
+
+export type Pixel = [number, number, number, number];
+
+/**
+ * Rotate clockwise about the centre onto a canvas large enough to hold the
+ * result, filling the corners the source does not cover.
+ *
+ * photon's own `rotate` is not usable: in @cf-wasm/photon 0.3.7 it returns a
+ * buffer in which nearly every pixel is wrong at every angle (a 60×40 solid
+ * fill comes back with 2399 of 2400 pixels altered), and the canvas it returns
+ * is far larger than the rotated content needs. Rotation therefore runs here on
+ * the raw RGBA bytes.
+ */
+export function rotated(img: PhotonImage, degrees: number, bg: Pixel): PhotonImage {
+	const w = img.get_width();
+	const h = img.get_height();
+	const src = img.get_raw_pixels();
+
+	// Right angles are an exact reindexing, with no resampling to blur text.
+	if (degrees === 90 || degrees === 180 || degrees === 270) {
+		const quarter = degrees / 90;
+		const dw = quarter === 2 ? w : h;
+		const dh = quarter === 2 ? h : w;
+		const dst = new Uint8Array(dw * dh * 4);
+		for (let y = 0; y < h; y++) {
+			for (let x = 0; x < w; x++) {
+				const dx = quarter === 1 ? h - 1 - y : quarter === 2 ? w - 1 - x : y;
+				const dy = quarter === 1 ? x : quarter === 2 ? h - 1 - y : w - 1 - x;
+				const si = (y * w + x) * 4;
+				const di = (dy * dw + dx) * 4;
+				dst[di] = src[si] as number;
+				dst[di + 1] = src[si + 1] as number;
+				dst[di + 2] = src[si + 2] as number;
+				dst[di + 3] = src[si + 3] as number;
+			}
+		}
+		return new PhotonImage(dst, dw, dh);
+	}
+
+	const rad = (degrees * Math.PI) / 180;
+	const cos = Math.cos(rad);
+	const sin = Math.sin(rad);
+	const dw = Math.max(1, Math.round(Math.abs(w * cos) + Math.abs(h * sin)));
+	const dh = Math.max(1, Math.round(Math.abs(w * sin) + Math.abs(h * cos)));
+	const dst = new Uint8Array(dw * dh * 4);
+	const cxS = w / 2;
+	const cyS = h / 2;
+	const cxD = dw / 2;
+	const cyD = dh / 2;
+	for (let dy = 0; dy < dh; dy++) {
+		for (let dx = 0; dx < dw; dx++) {
+			const ox = dx + 0.5 - cxD;
+			const oy = dy + 0.5 - cyD;
+			const sx = ox * cos + oy * sin + cxS;
+			const sy = -ox * sin + oy * cos + cyS;
+			const di = (dy * dw + dx) * 4;
+			if (sx < 0 || sy < 0 || sx >= w || sy >= h) {
+				dst[di] = bg[0];
+				dst[di + 1] = bg[1];
+				dst[di + 2] = bg[2];
+				dst[di + 3] = bg[3];
+				continue;
+			}
+			// Bilinear, so an arbitrary angle does not shred the letterforms.
+			const fx = sx - 0.5;
+			const fy = sy - 0.5;
+			const x0 = Math.floor(fx);
+			const y0 = Math.floor(fy);
+			const tx = fx - x0;
+			const ty = fy - y0;
+			const xa = Math.min(w - 1, Math.max(0, x0));
+			const ya = Math.min(h - 1, Math.max(0, y0));
+			const xb = Math.min(w - 1, Math.max(0, x0 + 1));
+			const yb = Math.min(h - 1, Math.max(0, y0 + 1));
+			const p00 = (ya * w + xa) * 4;
+			const p10 = (ya * w + xb) * 4;
+			const p01 = (yb * w + xa) * 4;
+			const p11 = (yb * w + xb) * 4;
+			for (let ch = 0; ch < 4; ch++) {
+				const top = (src[p00 + ch] as number) * (1 - tx) + (src[p10 + ch] as number) * tx;
+				const bot = (src[p01 + ch] as number) * (1 - tx) + (src[p11 + ch] as number) * tx;
+				dst[di + ch] = Math.round(top * (1 - ty) + bot * ty);
+			}
+		}
+	}
+	return new PhotonImage(dst, dw, dh);
+}
+
 export interface EncodeResult {
 	bytes: Uint8Array;
 	contentType: string;
@@ -98,7 +189,9 @@ export function transform(
 		if (work.get_width() !== resolved.outW || work.get_height() !== resolved.outH)
 			release(resize(work, resolved.outW, resolved.outH, SamplingFilter.Lanczos3));
 		if (resolved.rotation.mirror) fliph(work);
-		if (resolved.rotation.degrees !== 0) release(rotate(work, resolved.rotation.degrees));
+		if (resolved.rotation.degrees !== 0)
+			// JPEG carries no alpha, so its uncovered corners have to be painted.
+			release(rotated(work, resolved.rotation.degrees, resolved.format === "jpg" ? WHITE : CLEAR));
 		if (resolved.quality === "gray") grayscale(work);
 		else if (resolved.quality === "bitonal") {
 			grayscale(work);
