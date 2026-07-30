@@ -78,12 +78,27 @@ async function loadMeta(env: Bindings, identifier: string): Promise<LoadedMeta |
 }
 
 /**
- * An entity tag for a response. R2 hands back the stored object's etag, which
- * changes whenever a prefix is re-ingested, so it identifies the bytes; the
- * extra parts distinguish responses that share a source but differ in output.
+ * An entity tag for a response whose bytes are already fixed by its URL. R2
+ * hands back the stored object's etag, which changes whenever a prefix is
+ * re-ingested, so it identifies the content.
  */
 function entityTag(...parts: string[]): string {
 	return `"${parts.join("-").replace(/"/g, "")}"`;
+}
+
+/**
+ * An entity tag taken from the representation itself. Listing the inputs that
+ * feed a document by hand invites leaving one out — the configured public base
+ * reaches the document through `id` and is easy to forget — so the bytes on the
+ * wire are hashed instead and nothing can drift out of the tag.
+ */
+async function digestTag(...parts: string[]): Promise<string> {
+	const data = new TextEncoder().encode(parts.join("\u0000"));
+	const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+	const hex = Array.from(hash.slice(0, 16))
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
+	return `"${hex}"`;
 }
 
 /**
@@ -176,18 +191,17 @@ async function infoResponse(
 ): Promise<Response> {
 	const loaded = await loadMeta(env, id);
 	if (!loaded) return jsonError(404, "unknown identifier");
-	const { stored, version } = loaded;
+	const { stored } = loaded;
 	const contentType = infoContentType(accept);
-	// The document depends on the stored metadata, on the configured ceilings,
-	// and on which media type was negotiated, so all three decide the tag.
-	const limits = metaLimits(env);
-	const tag = entityTag(
-		version,
-		String(limits.maxWidth ?? 0),
-		String(limits.maxHeight ?? 0),
-		String(limits.maxArea ?? 0),
-		contentType.startsWith("application/ld") ? "ld" : "json",
-	);
+	const doc = buildInfoJson({
+		id: `${env.PUBLIC_BASE}/${encodeId(id)}`,
+		meta: { width: stored.width, height: stored.height, ...metaLimits(env) },
+		scaleFactors: stored.levels,
+	});
+	const body = JSON.stringify(doc);
+	// The media type joins the body because the two negotiated forms carry the
+	// same bytes under different types, and those are separate representations.
+	const tag = await digestTag(contentType, body);
 	const headers = {
 		...CORS,
 		"Content-Type": contentType,
@@ -196,12 +210,7 @@ async function infoResponse(
 		ETag: tag,
 	};
 	if (etagMatches(ifNoneMatch, tag)) return notModified(headers);
-	const doc = buildInfoJson({
-		id: `${env.PUBLIC_BASE}/${encodeId(id)}`,
-		meta: { width: stored.width, height: stored.height, ...limits },
-		scaleFactors: stored.levels,
-	});
-	return new Response(JSON.stringify(doc), { status: 200, headers });
+	return new Response(body, { status: 200, headers });
 }
 
 app.get("/collections/:name/manifest.json", async (c) => {
