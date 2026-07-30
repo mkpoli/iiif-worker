@@ -272,6 +272,37 @@ export function resolveRegion(region: Region, meta: ImageMeta): Rect {
 	return { x: rect.x, y: rect.y, w, h };
 }
 
+/** Largest scale factor for which w×h still satisfies every server ceiling. */
+function limitScale(w: number, h: number, meta: ImageMeta): number {
+	return Math.min(
+		(meta.maxWidth ?? Number.POSITIVE_INFINITY) / w,
+		(meta.maxHeight ?? Number.POSITIVE_INFINITY) / h,
+		Math.sqrt((meta.maxArea ?? Number.POSITIVE_INFINITY) / (w * h)),
+	);
+}
+
+/**
+ * The dimensions `max` and `^max` resolve to. `max` fills the server ceilings
+ * without ever enlarging; `^max` scales up to them. With no ceiling configured
+ * there is nothing to scale up to, so `^max` yields the region unchanged.
+ *
+ * The server picks these dimensions itself, so a ceiling small enough to round
+ * an axis to zero clamps to one pixel rather than failing the request.
+ */
+export function maxDimensions(
+	rect: Rect,
+	meta: ImageMeta,
+	upscale: boolean,
+): { outW: number; outH: number } {
+	const raw = limitScale(rect.w, rect.h, meta);
+	const scale = upscale ? raw : Math.min(1, raw);
+	if (!Number.isFinite(scale) || scale === 1) return { outW: rect.w, outH: rect.h };
+	return {
+		outW: Math.max(1, Math.floor(rect.w * scale)),
+		outH: Math.max(1, Math.floor(rect.h * scale)),
+	};
+}
+
 /** Resolve a size against a resolved region, applying spec rules. */
 export function resolveSize(
 	size: Size,
@@ -282,22 +313,11 @@ export function resolveSize(
 	const maxH = meta.maxHeight ?? Number.POSITIVE_INFINITY;
 	const maxArea = meta.maxArea ?? Number.POSITIVE_INFINITY;
 
-	const fitMax = (w: number, h: number): { outW: number; outH: number } => {
-		let outW = w;
-		let outH = h;
-		const scale = Math.min(1, maxW / outW, maxH / outH, Math.sqrt(maxArea / (outW * outH)));
-		if (scale < 1) {
-			outW = Math.floor(outW * scale);
-			outH = Math.floor(outH * scale);
-		}
-		return { outW: Math.max(1, outW), outH: Math.max(1, outH) };
-	};
-
 	let outW: number;
 	let outH: number;
 	switch (size.kind) {
 		case "max": {
-			return fitMax(rect.w, rect.h);
+			return maxDimensions(rect, meta, size.upscale);
 		}
 		case "w":
 			outW = size.w;
@@ -316,14 +336,19 @@ export function resolveSize(
 			outH = size.h;
 			break;
 		case "confined": {
-			const scale = Math.min(size.w / rect.w, size.h / rect.h);
+			// The result is as large as possible while fitting inside the box, the
+			// server ceilings, and — without `^` — the region itself. A box larger
+			// than any of those shrinks the scale rather than failing the request.
+			let scale = Math.min(size.w / rect.w, size.h / rect.h, limitScale(rect.w, rect.h, meta));
+			if (!size.upscale) scale = Math.min(1, scale);
 			outW = Math.round(rect.w * scale);
 			outH = Math.round(rect.h * scale);
 			break;
 		}
 	}
-	outW = Math.max(1, outW);
-	outH = Math.max(1, outH);
+	// A client-specified size that scales an axis below one pixel has no image
+	// to return.
+	if (outW < 1 || outH < 1) throw new IIIFError(400, "size rounds to zero pixels");
 	if (!size.upscale && (outW > rect.w || outH > rect.h))
 		throw new IIIFError(400, "size exceeds region; prefix with ^ to allow upscaling");
 	if (outW > maxW || outH > maxH || outW * outH > maxArea)

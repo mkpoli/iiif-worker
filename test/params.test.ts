@@ -3,6 +3,7 @@ import {
 	canonicalPath,
 	IIIFError,
 	type ImageMeta,
+	maxDimensions,
 	parseIIIFPath,
 	parseQualityFormat,
 	parseRegion,
@@ -189,6 +190,41 @@ describe("size resolution", () => {
 			outW: 600,
 			outH: 400,
 		}));
+	test("^max with no limits keeps the region", () =>
+		expect(resolveSize({ kind: "max", upscale: true }, rect, small)).toEqual({
+			outW: 300,
+			outH: 200,
+		}));
+	test("^max scales up to maxWidth", () =>
+		expect(resolveSize({ kind: "max", upscale: true }, rect, { ...small, maxWidth: 900 })).toEqual({
+			outW: 900,
+			outH: 600,
+		}));
+	test("^max scales up to maxArea", () =>
+		expect(
+			resolveSize({ kind: "max", upscale: true }, rect, { ...small, maxArea: 240_000 }),
+		).toEqual({ outW: 600, outH: 400 }));
+	test("confined box larger than region fits the region", () =>
+		expect(resolveSize({ kind: "confined", upscale: false, w: 600, h: 600 }, rect, small)).toEqual({
+			outW: 300,
+			outH: 200,
+		}));
+	test("^confined box larger than region upscales", () =>
+		expect(resolveSize({ kind: "confined", upscale: true, w: 600, h: 600 }, rect, small)).toEqual({
+			outW: 600,
+			outH: 400,
+		}));
+	test("confined never exceeds server limits", () =>
+		expect(
+			resolveSize({ kind: "confined", upscale: true, w: 6000, h: 6000 }, rect, {
+				...small,
+				maxWidth: 450,
+			}),
+		).toEqual({ outW: 450, outH: 300 }));
+	test("size rounding below one pixel → 400", () =>
+		expect(() => resolveSize({ kind: "pct", upscale: false, n: 0.1 }, rect, small)).toThrow(
+			IIIFError,
+		));
 	test("^ but over server max → 400", () =>
 		expect(() =>
 			resolveSize({ kind: "w", upscale: true, w: 600 }, rect, {
@@ -196,6 +232,24 @@ describe("size resolution", () => {
 				maxWidth: 500,
 			}),
 		).toThrow(IIIFError));
+});
+
+describe("max dimensions", () => {
+	const rect = { x: 0, y: 0, w: 300, h: 200 };
+	test("unbounded max is the region", () =>
+		expect(maxDimensions(rect, small, false)).toEqual({ outW: 300, outH: 200 }));
+	test("unbounded ^max is the region", () =>
+		expect(maxDimensions(rect, small, true)).toEqual({ outW: 300, outH: 200 }));
+	test("^max fills maxWidth", () =>
+		expect(maxDimensions(rect, { ...small, maxWidth: 1200 }, true)).toEqual({
+			outW: 1200,
+			outH: 800,
+		}));
+	test("max shrinks to maxHeight", () =>
+		expect(maxDimensions(rect, { ...small, maxHeight: 100 }, false)).toEqual({
+			outW: 150,
+			outH: 100,
+		}));
 });
 
 describe("canonical path", () => {
