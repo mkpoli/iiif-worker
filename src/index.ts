@@ -240,6 +240,8 @@ async function infoResponse(
 		id: `${env.PUBLIC_BASE}/${encodeId(id)}`,
 		meta: { width: stored.width, height: stored.height, ...metaLimits(env) },
 		scaleFactors: stored.levels,
+		rights: stored.rights,
+		partOf: stored.partOf,
 	});
 	const body = JSON.stringify(doc);
 	// The media type joins the body because the two negotiated forms carry the

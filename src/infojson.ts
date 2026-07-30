@@ -2,6 +2,24 @@
 
 import type { ImageMeta } from "./params";
 
+/**
+ * `rights` is not free text. The specification restricts it to a Creative
+ * Commons licence URI, a RightsStatements.org statement, or something added
+ * through the registry of extensions, so anything else is dropped rather than
+ * published in a document that claims to be conformant.
+ * https://iiif.io/api/image/3.0/#52-technical-properties
+ */
+export function isRightsUri(value: string): boolean {
+	return [
+		"http://creativecommons.org/licenses/",
+		"https://creativecommons.org/licenses/",
+		"http://creativecommons.org/publicdomain/",
+		"https://creativecommons.org/publicdomain/",
+		"http://rightsstatements.org/vocab/",
+		"https://rightsstatements.org/vocab/",
+	].some((prefix) => value.startsWith(prefix));
+}
+
 export interface InfoOptions {
 	/** Absolute base URI of this image, no trailing slash. */
 	id: string;
@@ -9,7 +27,9 @@ export interface InfoOptions {
 	/** Pyramid scale denominators available as pre-rendered levels, e.g. [1,2,4,8]. */
 	scaleFactors: number[];
 	tileSize?: number;
+	/** A licence or rights statement URI; see `isRightsUri`. */
 	rights?: string;
+	/** Resources that reference this image service, such as its manifest. */
 	partOf?: { id: string; type: string; label?: Record<string, string[]> }[];
 }
 
@@ -76,7 +96,7 @@ export function buildInfoJson(o: InfoOptions): Record<string, unknown> {
 			"sizeUpscaling",
 		],
 	};
-	if (o.rights) doc.rights = o.rights;
+	if (o.rights && isRightsUri(o.rights)) doc.rights = o.rights;
 	if (o.partOf?.length) doc.partOf = o.partOf;
 	for (const k of ["maxWidth", "maxHeight", "maxArea"]) if (doc[k] === undefined) delete doc[k];
 	return doc;

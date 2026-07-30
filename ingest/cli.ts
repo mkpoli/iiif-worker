@@ -14,6 +14,7 @@
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import sharp from "sharp";
+import { isRightsUri } from "../src/infojson";
 
 const MAX_PIXELS = 12_000_000;
 const LEVELS = [1, 2, 4, 8];
@@ -26,13 +27,14 @@ interface Args {
 	base: string;
 	dryRun: boolean;
 	local?: string;
+	rights?: string;
 }
 
 function parseArgs(argv: string[]): Args {
 	const [folder, ...rest] = argv;
 	if (!folder) {
 		console.error(
-			"usage: bun run ingest/cli.ts <folder> --collection <name> [--label ...] [--bucket ...] [--base ...] [--dry-run] [--local dir]",
+			"usage: bun run ingest/cli.ts <folder> --collection <name> [--label ...] [--bucket ...] [--base ...] [--rights uri] [--dry-run] [--local dir]",
 		);
 		process.exit(1);
 	}
@@ -45,9 +47,19 @@ function parseArgs(argv: string[]): Args {
 		console.error("--collection is required");
 		process.exit(1);
 	}
+	const rights = get("--rights");
+	if (rights !== undefined && !isRightsUri(rights)) {
+		console.error(
+			`--rights must be a Creative Commons or RightsStatements.org URI, not ${rights}\n` +
+				"  e.g. https://creativecommons.org/licenses/by/4.0/\n" +
+				"       http://rightsstatements.org/vocab/InC/1.0/",
+		);
+		process.exit(1);
+	}
 	return {
 		folder,
 		collection,
+		rights,
 		label: get("--label") ?? collection,
 		bucket: get("--bucket") ?? "iiif-images",
 		base: get("--base") ?? "https://iiif.mkpo.li",
@@ -147,10 +159,20 @@ async function main(): Promise<void> {
 							.toBuffer();
 			await putObject(args, `${prefix}/L${f}.jpg`, new Uint8Array(buf), "image/jpeg");
 		}
+		// The collection manifest references this image service, which is what
+		// `partOf` is for, and it is known here without anyone configuring it.
+		const manifestUrl = `${args.base}/collections/${encodeURIComponent(args.collection)}/manifest.json`;
 		await putObject(
 			args,
 			`${prefix}/meta.json`,
-			JSON.stringify({ width, height, levels, format: "jpeg" }),
+			JSON.stringify({
+				width,
+				height,
+				levels,
+				format: "jpeg",
+				...(args.rights ? { rights: args.rights } : {}),
+				partOf: [{ id: manifestUrl, type: "Manifest", label: { none: [args.label] } }],
+			}),
 			"application/json",
 		);
 		// A slash inside an identifier is percent-encoded per section 9, so the
