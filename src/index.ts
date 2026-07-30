@@ -71,10 +71,53 @@ interface LoadedMeta {
 	version: string;
 }
 
-async function loadMeta(env: Bindings, identifier: string): Promise<LoadedMeta | null> {
+/**
+ * How long a metadata lookup is reused. Every request needs `meta.json` before
+ * it can do anything, so reading it from R2 each time puts a network round trip
+ * and a class B operation in front of even a cached image. A minute of reuse
+ * removes almost all of that; the cost is that a re-ingested prefix can serve
+ * its previous dimensions for up to that long before healing itself.
+ */
+const META_TTL_SECONDS = 60;
+
+/** A prefix that does not exist is remembered too, so a flood of requests for
+ * identifiers that were never ingested cannot be turned into R2 traffic. */
+const ABSENT = "absent";
+
+function metaCacheKey(identifier: string): Request {
+	// A synthetic key, never a URL anything can reach. The identifier goes in the
+	// query rather than the path: a path is subject to dot-segment
+	// normalization, which collapses `.` and `..` onto the same URL and would
+	// let two identifiers share one entry. A query string is left alone.
+	const key = new URL("https://metadata.iiif-worker.internal/");
+	key.searchParams.set("id", identifier);
+	return new Request(key.toString());
+}
+
+async function loadMeta(
+	env: Bindings,
+	identifier: string,
+	cache: Cache | null,
+): Promise<LoadedMeta | null> {
+	const key = metaCacheKey(identifier);
+	const hit = await cache?.match(key);
+	if (hit) {
+		const cached = (await hit.json()) as LoadedMeta | typeof ABSENT;
+		return cached === ABSENT ? null : cached;
+	}
+
 	const obj = await env.IMAGES.get(`${identifier}/meta.json`);
-	if (!obj) return null;
-	return { stored: (await obj.json()) as StoredMeta, version: obj.etag };
+	const loaded: LoadedMeta | null = obj
+		? { stored: (await obj.json()) as StoredMeta, version: obj.etag }
+		: null;
+
+	await cache?.put(
+		key,
+		new Response(JSON.stringify(loaded ?? ABSENT), {
+			headers: { "Cache-Control": `max-age=${META_TTL_SECONDS}` },
+		}),
+	);
+	return loaded;
 }
 
 /**
@@ -189,7 +232,7 @@ async function infoResponse(
 	accept: string | undefined,
 	ifNoneMatch: string | undefined,
 ): Promise<Response> {
-	const loaded = await loadMeta(env, id);
+	const loaded = await loadMeta(env, id, edgeCache());
 	if (!loaded) return jsonError(404, "unknown identifier");
 	const { stored } = loaded;
 	const contentType = infoContentType(accept);
@@ -247,7 +290,8 @@ async function imageResponse(
 	trailing: [string, string, string, string],
 ): Promise<Response> {
 	const req = parseIIIFPath(...trailing);
-	const loaded = await loadMeta(c.env, id);
+	const cache = edgeCache();
+	const loaded = await loadMeta(c.env, id, cache);
 	if (!loaded) return jsonError(404, "unknown identifier");
 	const { stored, version } = loaded;
 	const meta: ImageMeta = { width: stored.width, height: stored.height, ...metaLimits(c.env) };
@@ -264,7 +308,6 @@ async function imageResponse(
 	if (etagMatches(c.req.header("If-None-Match"), tag))
 		return notModified({ ...CORS, "Cache-Control": IMMUTABLE, ETag: tag });
 
-	const cache = edgeCache();
 	const cacheKey = renderCacheKey(c.req.url, version);
 	const hit = await cache?.match(cacheKey);
 	if (hit) return hit;
@@ -382,6 +425,9 @@ app.get("/", (c) =>
 		spec: "https://iiif.io/api/image/3.0/",
 	}),
 );
+
+/** Exposed so the metadata cache can be tested against a stub Cache. */
+export const loadMetaForTest = loadMeta;
 
 app.notFound(() => jsonError(404, "not found"));
 app.onError((e) => {
