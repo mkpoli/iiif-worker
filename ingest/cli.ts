@@ -114,10 +114,13 @@ async function main(): Promise<void> {
 	for (const file of files) {
 		const id = basename(file, extname(file));
 		const prefix = `${args.collection}/${id}`;
-		const src = sharp(join(args.folder, file), { failOn: "error" });
+		// `.rotate()` with no argument applies the EXIF orientation. Without it a
+		// phone photo or scanner output lands sideways and the tag is dropped on
+		// re-encode, leaving no way for a client to correct it.
+		const src = sharp(join(args.folder, file), { failOn: "error" }).rotate();
 		const meta = await src.metadata();
-		const width = meta.width ?? 0;
-		const height = meta.height ?? 0;
+		const width = meta.autoOrient?.width ?? meta.width ?? 0;
+		const height = meta.autoOrient?.height ?? meta.height ?? 0;
 		if (width * height > MAX_PIXELS) {
 			console.error(
 				`${file}: ${width}x${height} exceeds ${MAX_PIXELS} pixels; ` +
