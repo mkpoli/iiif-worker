@@ -119,7 +119,25 @@ function encodeId(id: string): string {
 	return id.split("/").map(encodeURIComponent).join("%2F");
 }
 
-async function infoResponse(env: Bindings, id: string): Promise<Response> {
+const LD_JSON = 'application/ld+json;profile="http://iiif.io/api/image/3/context.json"';
+
+/**
+ * Section 5.1 asks for JSON-LD by default and for content negotiation when the
+ * client states a preference, so a client that asks only for `application/json`
+ * gets plain JSON rather than a media type it said it would not take.
+ */
+function infoContentType(accept: string | undefined): string {
+	if (!accept) return LD_JSON;
+	if (accept.includes("application/ld+json")) return LD_JSON;
+	if (accept.includes("application/json")) return "application/json";
+	return LD_JSON;
+}
+
+async function infoResponse(
+	env: Bindings,
+	id: string,
+	accept: string | undefined,
+): Promise<Response> {
 	const loaded = await loadMeta(env, id);
 	if (!loaded) return jsonError(404, "unknown identifier");
 	const { stored } = loaded;
@@ -132,7 +150,8 @@ async function infoResponse(env: Bindings, id: string): Promise<Response> {
 		status: 200,
 		headers: {
 			...CORS,
-			"Content-Type": 'application/ld+json;profile="http://iiif.io/api/image/3/context.json"',
+			"Content-Type": infoContentType(accept),
+			Vary: "Accept",
 			"Cache-Control": "public, max-age=86400",
 		},
 	});
@@ -222,7 +241,7 @@ app.get("/iiif/3/*", async (c) => {
 
 		if (rest.at(-1) === "info.json") {
 			if (rest.length < 2) return jsonError(404, "missing identifier");
-			return await infoResponse(c.env, decodeId(rest.slice(0, -1)));
+			return await infoResponse(c.env, decodeId(rest.slice(0, -1)), c.req.header("Accept"));
 		}
 
 		// An image request is an identifier plus region/size/rotation/quality.format,
