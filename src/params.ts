@@ -370,6 +370,17 @@ export function resolveSize(
 export function resolve(req: IIIFRequest, meta: ImageMeta): ResolvedRequest {
 	const rect = resolveRegion(req.region, meta);
 	const { outW, outH } = resolveSize(req.size, rect, meta);
+	// Rotation by anything other than a right angle returns a canvas large
+	// enough to hold the tilted rectangle, and that canvas is what has to fit in
+	// memory, so the area ceiling applies to it rather than to the pre-rotation
+	// size a client asked for.
+	const deg = req.rotation.degrees;
+	if (deg % 90 !== 0 && meta.maxArea !== undefined) {
+		const rad = (deg * Math.PI) / 180;
+		const bw = Math.abs(outW * Math.cos(rad)) + Math.abs(outH * Math.sin(rad));
+		const bh = Math.abs(outW * Math.sin(rad)) + Math.abs(outH * Math.cos(rad));
+		if (bw * bh > meta.maxArea) throw new IIIFError(400, "rotated size exceeds server limits");
+	}
 	return {
 		rect,
 		outW,
