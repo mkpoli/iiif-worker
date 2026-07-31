@@ -98,7 +98,7 @@ That URL opens in [Mirador](https://projectmirador.org/embed/) or the
 ## Using your own domain
 
 Once it works, swap the `workers.dev` address for a real one. Add the domain to
-Cloudflare, then put the `routes` block back in `wrangler.jsonc`:
+Cloudflare, then add a `routes` block to `wrangler.jsonc`:
 
 ```jsonc
 "routes": [
@@ -106,8 +106,10 @@ Cloudflare, then put the `routes` block back in `wrangler.jsonc`:
 ]
 ```
 
-Change `PUBLIC_BASE` to `https://iiif.example.com/iiif/3` to match, and deploy.
-The two must always agree.
+Deploy, and that is all. Requests now arrive bearing the new hostname, so the
+service starts describing itself with it — `PUBLIC_BASE` stays unset. Images
+already ingested keep working; only manifests generated earlier still carry the
+old address, since the ingest CLI writes that in at the time.
 
 ## What will bite you
 

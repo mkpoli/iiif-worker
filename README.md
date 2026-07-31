@@ -99,54 +99,41 @@ Nothing needs configuring first: the service takes its address from the request,
 so it answers correctly on whatever `workers.dev` hostname it is given. Add
 images, and it serves them.
 
-Or from a checkout, which is the same three commands:
+Or from a checkout:
 
 ```bash
 git clone https://github.com/mkpoli/iiif-worker && cd iiif-worker
 bun install
+bunx wrangler login
 bunx wrangler r2 bucket create iiif-images && bunx wrangler deploy
 ```
 
-For putting images in, using your own domain, and the mistakes that cost an
-afternoon, see [docs/hosting.md](./docs/hosting.md).
+Wrangler prints the address it deployed to. Nothing in `wrangler.jsonc` needs
+editing first — change `name` if you want a different one.
+
+## Add images
+
+Set the upload token the Worker checks, then point the ingest CLI at a folder.
+Each file becomes an image identified by `{collection}/{filename}`.
 
 ```bash
-git clone https://github.com/mkpoli/iiif-worker
-cd iiif-worker
-bun install
-```
-
-Create a bucket and edit `wrangler.jsonc` — set `name`, the R2 `bucket_name`,
-`PUBLIC_BASE` (the absolute base your images will be served under, ending in `/iiif/3`),
-and the route hostname:
-
-```bash
-bunx wrangler r2 bucket create iiif-images
-```
-
-Deploy, and set the upload token the ingest CLI uses:
-
-```bash
-bunx wrangler deploy
 openssl rand -hex 24 | bunx wrangler secret put INGEST_TOKEN
+
+export INGEST_TOKEN=<the token you just generated>
+BASE=https://iiif-worker.yourname.workers.dev
+
+bun run ingest/cli.ts ./scans --collection my-book --base $BASE --local ./out
+bun run scripts/push-tree.ts ./out $BASE --verify
 ```
 
-Ingest a folder of images. Each becomes a IIIF image identified by
-`{collection}/{filename-without-extension}`:
+The first command builds each image into a small pyramid locally; the second
+uploads it, and `--verify` on a re-run skips whatever is already there.
 
-```bash
-export INGEST_TOKEN=<the token from above>
-bun run ingest/cli.ts ./scans --collection my-book --base https://iiif.example.com --local ./out
-bun run scripts/push-tree.ts ./out https://iiif.example.com --verify
-```
+Now `$BASE/iiif/3/my-book%2F0001/info.json` answers, and a viewer pointed at
+`$BASE/collections/my-book/manifest.json` can pan and zoom the whole book.
 
-`--local ./out` builds the pyramid into a local directory; `push-tree.ts` then
-uploads it through the Worker. Drop `--local` to have the CLI upload each object
-itself with `wrangler r2 object put` as it goes.
-
-Now `https://iiif.example.com/iiif/3/my-book/0001/info.json` answers, and a viewer
-pointed at it can pan and zoom the whole book from
-`https://iiif.example.com/collections/my-book/manifest.json`.
+For your own domain and the mistakes that cost an afternoon, see
+[docs/hosting.md](./docs/hosting.md).
 
 ## Layout in R2
 
