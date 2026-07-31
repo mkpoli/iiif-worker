@@ -7,7 +7,7 @@
 [![MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/runs%20on-Cloudflare%20Workers-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers/)
 [![IIIF Image API 3.0](https://img.shields.io/badge/IIIF-Image_API_3.0_Level_2-1a3b5d)](https://iiif.io/api/image/3.0/)
-[![tests](https://img.shields.io/badge/tests-115_passing-success?logo=bun&logoColor=white)](#how-it-was-tested)
+[![tests](https://img.shields.io/badge/tests-151_passing-success?logo=bun&logoColor=white)](#how-it-was-tested)
 
 </div>
 
@@ -27,8 +27,10 @@ Java or C++ daemon (Cantaloupe, IIPImage) on a box you keep patched. This runs o
 Workers, so there is no server to keep alive — the deployment is a `wrangler deploy`, the
 images live in your R2 bucket, and the same endpoint answers from anywhere.
 
-As far as the [IIIF community wiki](https://iiif.io/get-started/image-servers/) and a
-2026 search show, this is the first IIIF Image API server for Cloudflare Workers. The
+As far as the [IIIF community wiki](https://iiif.io/get-started/image-servers/),
+[awesome-iiif](https://github.com/IIIF/awesome-iiif) and a search of GitHub showed in
+July 2026, no other IIIF Image API server runs on Cloudflare Workers — or on any other
+V8-isolate edge platform. The
 Lambda-based [serverless-iiif](https://github.com/samvera/serverless-iiif) does the same
 job on AWS, but its image work is native libvips, which a Workers isolate cannot load.
 
@@ -45,8 +47,14 @@ job on AWS, but its image work is native libvips, which a Workers isolate cannot
   - **format** — `jpg`, `png`, `webp`; `tif`, `gif`, `pdf` and `jp2` are answered
     501, which tells a client the request was understood and the format is not
     produced here
-  - canonical-URI redirects, a `profile` link header, CORS, and long-lived immutable
-    caching
+  - canonical-URI redirects, `canonical` and `profile` link headers, CORS with the
+    `Link` header exposed to browser scripts, and long-lived immutable caching
+  - **conditional requests** — entity tags on images and on `info.json`, so a client
+    that revalidates gets a 304 instead of the bytes again
+  - **content negotiation** — `info.json` is served as `application/ld+json`, or as
+    `application/json` when that is what the client asked for
+  - **rights and provenance** — a licence URI and a link back to the manifest, both
+    recorded at ingest and published in `info.json`
 - **`info.json`** as an `ImageService3` document with `sizes`, `tiles`, and the
   `extraFeatures` list a viewer reads to know what it can ask for.
 - **Presentation 3 manifests**, one per collection, generated at ingest time and served
@@ -71,12 +79,12 @@ Cloudflare between the R2 read and the response.
 | Compliance level | 2 | 2 | 2 | 0 and 2 | 2 | 0 |
 | Arbitrary region / size / rotation | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ fixed tiles |
 | Server to keep running | none | JVM | daemon | daemon / Lambda | Lambda | none |
-| Source formats | JPEG · PNG · WebP | + TIFF · JP2 | + TIFF · JP2 | + TIFF, no JP2 | + TIFF · JP2 | pre-rendered |
+| Source formats | JPEG · PNG · WebP · TIFF | + JP2 | + TIFF · JP2 | + TIFF, no JP2 | + TIFF · JP2 | pre-rendered |
 | One tile out of a pyramidal master | ❌ decodes a whole level | ✅ | ✅ | ❌ | ✅ | n/a |
 | Large masters (12 MP+) | ❌ 128 MB isolate cap | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Per-request cost | Workers CPU-ms | fixed host | fixed host | host / CPU-ms | Lambda ms | none |
 | Setup | `wrangler deploy` | install + tune JVM | build + configure | build / package | AWS stack | run a tiler |
-| License | MIT | custom (BSD-like) | GPL | BSD-3 | Apache-2.0 | — |
+| License | MIT | NCSA | GPL-3.0 | BSD-3 | Apache-2.0 | — |
 
 A wider comparison covering SIPI, Loris, RAIS, digilib, Hymir, Wolpi, iiiris and the
 static tilers, with licences, release dates and colour handling, is in
@@ -142,19 +150,23 @@ For your own domain and the mistakes that cost an afternoon, see
 One prefix per image; the ingest CLI writes this and the Worker reads it.
 
 ```
-{collection}/{id}/meta.json            {"width","height","levels":[1,2,4,8],"format":"jpeg"}
+{collection}/{id}/meta.json            {"width","height","levels":[1,2,4,8],"format":"jpeg",
+                                        optional "rights", "partOf"}
 {collection}/{id}/L1.jpg               full-resolution level (L1), then L2, L4, L8
 collections/{collection}/manifest.json IIIF Presentation 3 manifest
 ```
 
-`meta.json` is the only lookup on the hot path; the rest is decided from it.
+A request reads `meta.json` and one pyramid level. The metadata is cached for a
+minute, so most requests read only the level, and a request answered from the
+edge cache or by a 304 reads neither.
 
 ## How it was tested
 
-- **115 unit tests** (`bun test`) over the request parser, the region/size math, the
-  pyramid level mapping and rotation, built from the IIIF 3.0 syntax tables — the
-  malformed-input cases the spec calls out, the canonical-form rewrites, and the
-  upscaling rules.
+- **151 unit tests** (`bun test`) over the request parser, the region/size math, the
+  pyramid level mapping, rotation, and the HTTP layer — routing, media-type
+  negotiation, entity tags and the caches. Built from the IIIF 3.0 syntax tables:
+  the malformed-input cases the spec calls out, the canonical-form rewrites, and
+  the upscaling rules.
 - **The official [IIIF Image API validator](https://pypi.org/project/iiif-validator/)**
   at Image API 3.0 level 2: **33 tests, 0 failures**. Reproduce it with
   `bun run validation-image`, which builds the validator's own reference image and
@@ -170,7 +182,8 @@ collections/{collection}/manifest.json IIIF Presentation 3 manifest
 ## Timing
 
 Against a deployed instance (a 2155×3452 leaf, 15 warm runs each, measured with
-`bun run bench/bench.ts`):
+`bun run bench/bench.ts`). These were taken before metadata caching and conditional
+requests landed, so they are a floor rather than a current reading:
 
 | Request | Cold | Warm p50 | Warm p90 |
 | :-- | --: | --: | --: |
@@ -218,7 +231,14 @@ canonical URL first, so the cache stays single-keyed per distinct image; those r
 carry the same long lifetime, so a viewer that speaks its own dialect pays the hop once
 instead of once per tile. An explicit `w,h` is served as written even when it equals the
 region — collapsing it to `max` would redirect every tile a viewer requests at native
-resolution, which is the most common request there is.
+resolution, which is the most common request there is. The cache key drops the query
+string and carries the `meta.json` etag, so a repeated URL with a fresh `?nonce=` cannot
+force a re-render.
+
+Image metadata is cached for a minute as well. Every request needs `meta.json` before it
+can decide anything, and reading it from R2 each time put a round trip in front of even a
+cached image. The cost of that minute is that a re-ingested prefix can answer with its
+previous dimensions until the entry expires.
 
 ## License
 
