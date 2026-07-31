@@ -1,8 +1,10 @@
 {
-	// Template config. Copy this, then change: name, the R2 bucket_name (must
-	// match a bucket you created with `wrangler r2 bucket create`), PUBLIC_BASE
-	// (the absolute base your images are served under, ending in /iiif/3), and
-	// the route hostname. Set INGEST_TOKEN as a secret to enable uploads:
+	// Deployable as it stands. The Worker answers on whatever hostname it is
+	// given, so nothing here has to be edited before a first deploy.
+	//
+	// To serve from your own domain, add a routes block:
+	//   "routes": [{ "pattern": "iiif.example.com", "custom_domain": true }]
+	// To enable uploads, set the secret the ingest route checks:
 	//   openssl rand -hex 24 | wrangler secret put INGEST_TOKEN
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "iiif-worker",
@@ -13,15 +15,17 @@
 		{ "binding": "IMAGES", "bucket_name": "iiif-images" }
 	],
 	"vars": {
-		"PUBLIC_BASE": "https://iiif.example.com/iiif/3",
+		// PUBLIC_BASE is intentionally absent. Unset, the service takes its
+		// address from the request, which is what lets a fresh deployment work on
+		// a workers.dev hostname nobody knew in advance. Set it only when clients
+		// reach the Worker under a different host than it sees, as behind a proxy:
+		//   "PUBLIC_BASE": "https://iiif.example.com/iiif/3",
+		//
 		// Output ceiling. MAX_AREA caps decoded output pixels; a decoded pixel
 		// costs four bytes and an isolate has 128 MB, so raising this far above
 		// the default risks requests failing on memory instead of returning an
 		// image. Unset or non-numeric falls back to the same 12000000.
 		"MAX_AREA": "12000000"
 	},
-	"observability": { "enabled": true },
-	"routes": [
-		{ "pattern": "iiif.example.com", "custom_domain": true }
-	]
+	"observability": { "enabled": true }
 }

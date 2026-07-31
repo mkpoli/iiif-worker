@@ -14,8 +14,14 @@ import { chooseLevel, type StoredMeta, transform } from "./pipeline";
 
 type Bindings = {
 	IMAGES: R2Bucket;
-	/** Absolute public base, e.g. "https://iiif.example.org/iiif/3". */
-	PUBLIC_BASE: string;
+	/**
+	 * Absolute public base, e.g. "https://iiif.example.org/iiif/3". Optional:
+	 * when unset it is taken from the request, which is what makes a one-click
+	 * deploy work without knowing the address in advance. Set it explicitly when
+	 * the host a client sees differs from the one reaching the Worker, as behind
+	 * a proxy or a rewriting CDN.
+	 */
+	PUBLIC_BASE?: string;
 	MAX_WIDTH?: string;
 	MAX_HEIGHT?: string;
 	MAX_AREA?: string;
@@ -160,6 +166,17 @@ function notModified(headers: Record<string, string>): Response {
 	return new Response(null, { status: 304, headers });
 }
 
+/**
+ * Where this service tells the world it lives. IIIF documents carry absolute
+ * URLs — `info.json` states its own `id` and every canonical redirect is a full
+ * URL — so a value is always needed. Deriving it from the request means a fresh
+ * deployment answers correctly on whatever hostname it was given.
+ */
+function publicBase(env: Bindings, requestUrl: string): string {
+	if (env.PUBLIC_BASE) return env.PUBLIC_BASE.replace(/\/+$/, "");
+	return `${new URL(requestUrl).origin}/iiif/3`;
+}
+
 function jsonError(status: number, message: string): Response {
 	return new Response(JSON.stringify({ error: message }), {
 		status,
@@ -231,13 +248,14 @@ async function infoResponse(
 	id: string,
 	accept: string | undefined,
 	ifNoneMatch: string | undefined,
+	requestUrl: string,
 ): Promise<Response> {
 	const loaded = await loadMeta(env, id, edgeCache());
 	if (!loaded) return jsonError(404, "unknown identifier");
 	const { stored } = loaded;
 	const contentType = infoContentType(accept);
 	const doc = buildInfoJson({
-		id: `${env.PUBLIC_BASE}/${encodeId(id)}`,
+		id: `${publicBase(env, requestUrl)}/${encodeId(id)}`,
 		meta: { width: stored.width, height: stored.height, ...metaLimits(env) },
 		scaleFactors: stored.levels,
 		rights: stored.rights,
@@ -301,7 +319,7 @@ async function imageResponse(
 
 	// Canonical URI redirect keeps the cache single-keyed.
 	const canonical = canonicalPath(resolved, meta);
-	const canonicalUrl = `${c.env.PUBLIC_BASE}/${encodeId(id)}/${canonical}`;
+	const canonicalUrl = `${publicBase(c.env, c.req.url)}/${encodeId(id)}/${canonical}`;
 	if (trailing.join("/") !== canonical) return seeOther(canonicalUrl);
 
 	// The canonical URL fixes every pixel of the output, so the stored version is
@@ -354,6 +372,7 @@ app.get("/iiif/3/*", async (c) => {
 				decodeId(rest.slice(0, -1)),
 				c.req.header("Accept"),
 				c.req.header("If-None-Match"),
+				c.req.url,
 			);
 		}
 
@@ -365,7 +384,7 @@ app.get("/iiif/3/*", async (c) => {
 		}
 
 		// Everything else is a base URI, which redirects to its info.json.
-		return seeOther(`${c.env.PUBLIC_BASE}/${encodeId(decodeId(rest))}/info.json`);
+		return seeOther(`${publicBase(c.env, c.req.url)}/${encodeId(decodeId(rest))}/info.json`);
 	} catch (e) {
 		if (e instanceof IIIFError) return jsonError(e.status, e.message);
 		throw e;
@@ -423,7 +442,7 @@ app.put("/ingest/:key{.+}", async (c) => {
 app.get("/", (c) =>
 	c.json({
 		service: "iiif-worker",
-		image_api: `${c.env.PUBLIC_BASE}/{identifier}/info.json`,
+		image_api: `${publicBase(c.env, c.req.url)}/{identifier}/info.json`,
 		spec: "https://iiif.io/api/image/3.0/",
 	}),
 );

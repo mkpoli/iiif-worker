@@ -278,3 +278,59 @@ describe("rights and partOf in the information document", () => {
 		expect((await info({ ...STORED, partOf: [] })).partOf).toBeUndefined();
 	});
 });
+
+describe("where the service says it lives", () => {
+	async function fetchWith(env: Record<string, unknown>, url: string, headers = {}) {
+		return app.fetch(new Request(url, { headers }), env, ctx as never);
+	}
+	const images = () => bucket().IMAGES;
+
+	test("with no PUBLIC_BASE the id follows the host that was asked", async () => {
+		const res = await fetchWith({ IMAGES: images() }, "https://alpha.example/iiif/3/bk/info.json");
+		expect(((await res.json()) as Record<string, unknown>).id).toBe(
+			"https://alpha.example/iiif/3/bk",
+		);
+	});
+
+	test("a different host gets a different id from the same deployment", async () => {
+		const res = await fetchWith({ IMAGES: images() }, "https://beta.example/iiif/3/bk/info.json");
+		expect(((await res.json()) as Record<string, unknown>).id).toBe(
+			"https://beta.example/iiif/3/bk",
+		);
+	});
+
+	test("an explicit PUBLIC_BASE still wins", async () => {
+		const res = await fetchWith(
+			{ IMAGES: images(), PUBLIC_BASE: "https://fixed.example/iiif/3" },
+			"https://whatever.example/iiif/3/bk/info.json",
+		);
+		expect(((await res.json()) as Record<string, unknown>).id).toBe(
+			"https://fixed.example/iiif/3/bk",
+		);
+	});
+
+	test("a trailing slash on PUBLIC_BASE does not double up", async () => {
+		const res = await fetchWith(
+			{ IMAGES: images(), PUBLIC_BASE: "https://fixed.example/iiif/3/" },
+			"https://x.test/iiif/3/bk/info.json",
+		);
+		expect(((await res.json()) as Record<string, unknown>).id).toBe(
+			"https://fixed.example/iiif/3/bk",
+		);
+	});
+
+	test("redirects point at the host that was asked", async () => {
+		const res = await fetchWith({ IMAGES: images() }, "https://alpha.example/iiif/3/bk");
+		expect(res.status).toBe(303);
+		expect(res.headers.get("Location")).toBe("https://alpha.example/iiif/3/bk/info.json");
+	});
+
+	test("a canonical redirect follows the same host", async () => {
+		const res = await fetchWith(
+			{ IMAGES: images() },
+			"https://alpha.example/iiif/3/bk/full/pct:50/0/default.jpg",
+		);
+		expect(res.status).toBe(303);
+		expect(res.headers.get("Location")).toStartWith("https://alpha.example/iiif/3/bk/");
+	});
+});

@@ -22,43 +22,21 @@ Images live in R2. The name is yours; use the same one in the next step.
 bunx wrangler r2 bucket create iiif-images
 ```
 
-## 2. Point the config at it
-
-Open `wrangler.jsonc` and change two things:
-
-- `name` — what the Worker is called, which also becomes part of its URL.
-- `bucket_name` — the bucket you just made.
-
-Then **delete the `routes` block**. That block is for a custom domain; without
-it the Worker gets a free `workers.dev` address, which is all you need to start.
-
-## 3. Deploy, then tell it its own address
+## 2. Deploy
 
 ```bash
 bunx wrangler deploy
 ```
 
-Wrangler prints the URL it deployed to, something like
-`https://iiif-worker.yourname.workers.dev`.
+That is the whole step. The shipped `wrangler.jsonc` deploys as it stands, and
+the service takes its address from whatever hostname the request arrived on, so
+there is nothing to fill in first. Wrangler prints the URL — something like
+`https://iiif-worker.yourname.workers.dev` — and that address already works.
 
-The server needs to know that address, because IIIF documents contain absolute
-URLs — `info.json` states its own `id`, and non-canonical requests redirect to a
-full URL. So set `PUBLIC_BASE` in `wrangler.jsonc` to that address with
-`/iiif/3` on the end, and deploy once more:
+Change `name` in `wrangler.jsonc` if you want a different one, and
+`bucket_name` if you did not call your bucket `iiif-images`.
 
-```jsonc
-"PUBLIC_BASE": "https://iiif-worker.yourname.workers.dev/iiif/3"
-```
-
-```bash
-bunx wrangler deploy
-```
-
-Two deploys the first time, one from then on. If you already know your
-`workers.dev` subdomain you can fill it in before the first deploy and skip the
-second.
-
-## 4. Set an upload token
+## 3. Set an upload token
 
 Uploads go through the Worker and are refused unless this secret exists. Keep
 the value; the next step needs it.
@@ -67,13 +45,13 @@ the value; the next step needs it.
 openssl rand -hex 24 | bunx wrangler secret put INGEST_TOKEN
 ```
 
-## 5. Put some images in
+## 4. Put some images in
 
 Point it at a folder. Every file becomes an image identified by
 `{collection}/{filename without extension}`.
 
 ```bash
-export INGEST_TOKEN=<the value from step 4>
+export INGEST_TOKEN=<the value from step 3>
 BASE=https://iiif-worker.yourname.workers.dev
 
 bun run ingest/cli.ts ./scans --collection my-book --base $BASE --local ./out
@@ -99,7 +77,7 @@ Sources may be JPEG, PNG, WebP or TIFF, up to 12 megapixels. Larger masters are
 refused with a message telling you to downsample; see
 [the ceiling](#why-12-megapixels) below.
 
-## 6. Check it
+## 5. Check it
 
 ```bash
 curl $BASE/iiif/3/my-book%2F0001/info.json
@@ -120,7 +98,7 @@ That URL opens in [Mirador](https://projectmirador.org/embed/) or the
 ## Using your own domain
 
 Once it works, swap the `workers.dev` address for a real one. Add the domain to
-Cloudflare, then put the `routes` block back in `wrangler.jsonc`:
+Cloudflare, then add a `routes` block to `wrangler.jsonc`:
 
 ```jsonc
 "routes": [
@@ -128,15 +106,18 @@ Cloudflare, then put the `routes` block back in `wrangler.jsonc`:
 ]
 ```
 
-Change `PUBLIC_BASE` to `https://iiif.example.com/iiif/3` to match, and deploy.
-The two must always agree.
+Deploy, and that is all. Requests now arrive bearing the new hostname, so the
+service starts describing itself with it — `PUBLIC_BASE` stays unset. Images
+already ingested keep working; only manifests generated earlier still carry the
+old address, since the ingest CLI writes that in at the time.
 
 ## What will bite you
 
-**`PUBLIC_BASE` not matching how clients actually reach the server.** This is
-the one that wastes an afternoon. If they disagree, `info.json` advertises an
-`id` nobody can fetch and redirects send clients somewhere else. Whenever you
-change the address, change both.
+**Setting `PUBLIC_BASE` to something clients cannot reach.** You do not normally
+need it at all — leave it unset and the service uses the hostname each request
+arrived on. Set it only when those differ, as behind a proxy or a rewriting CDN.
+Set it wrongly and `info.json` advertises an `id` nobody can fetch while
+redirects send clients somewhere else.
 
 **Re-uploading an image that viewers have already seen.** Rendered images are
 cached for a year and marked immutable. Re-ingesting a prefix moves its
@@ -177,7 +158,6 @@ current numbers. There is no idle cost — nothing runs between requests.
 To try it without deploying:
 
 ```bash
-echo 'PUBLIC_BASE = "http://localhost:8787/iiif/3"' > .dev.vars
 bun run ingest/cli.ts ./scans --collection my-book --base http://localhost:8787 --local ./out
 # load ./out into the local R2 simulator
 find ./out -type f | while read -r f; do
