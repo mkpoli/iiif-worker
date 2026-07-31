@@ -39,7 +39,7 @@ Licence, maintenance and colour handling:
 
 | | Licence | Latest release | Colour: ICC / CMYK / EXIF orientation |
 | :-- | :-- | :-- | :-- |
-| **iiif-worker** | MIT | unreleased | ✗ / ✗ / applied at ingest |
+| **iiif-worker** | MIT | v0.1.0, 2026-07-31 | ✗ / ✗ / applied at ingest |
 | Cantaloupe | NCSA | v5.0.7, 2025-03-13 | transformed by some processors / unsupported in Java2d / exposed, auto-rotate unconfirmed |
 | IIPImage | GPL-3.0 | 1.3, 2025-05-28 | carried through, no transform found / not established / read on JPEG input |
 | SIPI | AGPL-3.0 | v6.3.0, 2026-07-29 | **transform via littlecms / ✓ / ✓ via exiv2** |
@@ -92,11 +92,17 @@ decoded pixels rather than 256 MB for the master. Nothing new had to be
 compiled: a JPEG-compressed tile decodes once the shared `JPEGTables` blob is
 spliced in front of it.
 
-So the honest boundary is narrower than the one first published. **Output**
-dimensions must stay capped — no isolate renders a gigapixel canvas, which is
-why every server in this table has a `maxArea` — but **master** dimensions need
-not be. Deep zoom over a very large master is reachable here, and is tracked as
-work rather than as a limit.
+**None of that is shipped.** The measurements above come from a standalone
+experiment, not from the request path: ingest still refuses anything over 12
+megapixels, and the server still reads whole pyramid levels. The comparison
+table above describes what this server does today, and its `pTIFF / JP2` and
+large-master entries stay as they are until a tile-reading path exists.
+
+What changes is the reason given. **Output** dimensions must stay capped — no
+isolate renders a gigapixel canvas, which is why every server in this table has
+a `maxArea`. **Master** dimensions need not be, so deep zoom over a very large
+master belongs on a roadmap rather than in a list of things the platform
+forbids.
 
 JPEG 2000 is the one that holds. A JP2 has no fixed tile index like a TIFF IFD,
 so random access means parsing TLM and PLT markers and driving a decoder that
@@ -105,10 +111,13 @@ TIFF at ingest, where native codecs are available, which reaches the same place
 for far less work; decoding JP2 inside the isolate is not a near-term gap to
 close.
 
-Beyond the pixels: no IIIF Authorization Flow, so embargoed or restricted
-material cannot be represented at all; no ICC colour management, which matters
-for reproduction-grade imaging; and the Presentation surface is one static
-manifest per collection, with no Collection resource and no `thumbnail`.
+Beyond the pixels: no IIIF Authorization Flow. Restricted material can be
+described — a `rights` statement is published in `info.json` when ingest records
+one — but nothing is enforced, so there is no way to serve a degraded version to
+anonymous callers and the full one to authenticated ones. No ICC colour
+management, which matters for reproduction-grade imaging. And the Presentation
+surface is one static manifest per collection, with no Collection resource and
+no `thumbnail`.
 
 **Features common elsewhere that are missing here.** A derivative cache with an
 eviction policy and a purge endpoint. Watermarking and redaction, which
@@ -121,9 +130,13 @@ reaches most of the benefit without a colour engine in the request path.
 
 **A fair summary.** For a collection of scanned pages or photographs where you
 want IIIF without running anything, this is a reasonable choice and unusually
-cheap. For a digitisation programme with JP2 masters, access control, or colour
-fidelity requirements, choose Cantaloupe, IIPImage or SIPI today. Those three are also
-the ones with a decade of institutional deployment behind them — Bayerische
+cheap. For a digitisation programme with JP2 masters or gigapixel sources,
+choose Cantaloupe, IIPImage or SIPI today; for colour fidelity, SIPI. If access
+control is the requirement, note from the table above that none of those three
+implements the Authorization Flow as specified — Cantaloupe offers
+delegate-script hooks and SIPI Auth 1.0, and only iiiris has the full
+Authorization Flow 2.0. Cantaloupe, IIPImage and SIPI are the ones with a decade
+of institutional deployment behind them — Bayerische
 Staatsbibliothek serves roughly 8 million newspaper pages through Hymir, the
 Internet Archive put 9.3 million items behind Cantaloupe, the Qatar Digital
 Library runs 500,000 JP2s on IIPImage.
