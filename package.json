@@ -1,9 +1,55 @@
 {
 	"name": "iiif-worker",
 	"version": "0.1.0",
-	"description": "IIIF Image API 3.0 server on Cloudflare Workers + R2",
-	"license": "MIT",
+	"private": true,
 	"type": "module",
+	"description": "IIIF Image API 3.0 server on a Cloudflare Worker you deploy yourself: arbitrary region, size, rotation, quality and format from images in R2, with the image work done in WebAssembly and no server process to operate.",
+	"license": "MIT",
+	"author": "mkpoli",
+	"homepage": "https://github.com/mkpoli/iiif-worker#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/mkpoli/iiif-worker.git"
+	},
+	"bugs": {
+		"url": "https://github.com/mkpoli/iiif-worker/issues"
+	},
+	"keywords": [
+		"iiif",
+		"iiif-image-api",
+		"image-server",
+		"image-api",
+		"iiif-server",
+		"cloudflare-workers",
+		"r2",
+		"webassembly",
+		"openseadragon",
+		"mirador",
+		"digital-humanities",
+		"digitization"
+	],
+	"cloudflare": {
+		"bindings": {
+			"IMAGES": {
+				"description": "R2 bucket holding the image pyramids and collection manifests. Created for you; the ingest CLI writes into it."
+			},
+			"MAX_AREA": {
+				"description": "Largest output in pixels a request may ask for. A Worker has 128 MB and a decoded pixel costs four bytes, so raising this far above the default risks requests failing on memory. Unset or non-numeric falls back to 12000000."
+			},
+			"MAX_WIDTH": {
+				"description": "Optional. Largest output width in pixels. Given without MAX_HEIGHT it caps both axes, which is what the specification says a lone maxWidth means."
+			},
+			"MAX_HEIGHT": {
+				"description": "Optional. Largest output height in pixels. The specification only allows this alongside MAX_WIDTH, so setting it alone applies the same value to both axes."
+			},
+			"PUBLIC_BASE": {
+				"description": "Optional. The absolute base your images are served under, ending in /iiif/3. Leave unset and the service uses the hostname each request arrived on; set it only when clients reach the Worker under a different host, as behind a proxy."
+			},
+			"INGEST_TOKEN": {
+				"description": "Secret enabling uploads through the /ingest route. Unset, that route stays closed and the deployment serves read-only. Generate with `openssl rand -hex 24`."
+			}
+		}
+	},
 	"scripts": {
 		"dev": "wrangler dev",
 		"deploy": "wrangler deploy",
