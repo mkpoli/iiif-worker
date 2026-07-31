@@ -334,3 +334,49 @@ describe("where the service says it lives", () => {
 		expect(res.headers.get("Location")).toStartWith("https://alpha.example/iiif/3/bk/");
 	});
 });
+
+describe("the ingest token", () => {
+	const body = { method: "PUT", headers: {}, body: "abc" };
+	async function ingest(stored: string | undefined, sent: string) {
+		const IMAGES = {
+			async get() {
+				return null;
+			},
+			async put() {},
+		} as unknown as R2Bucket;
+		return app.fetch(
+			new Request("https://x.test/ingest/a.jpg", {
+				...body,
+				headers: { Authorization: `Bearer ${sent}`, "Content-Length": "3" },
+			}),
+			{ IMAGES, INGEST_TOKEN: stored },
+			ctx as never,
+		);
+	}
+
+	test("a matching token is accepted", async () => {
+		expect((await ingest("deadbeef", "deadbeef")).status).toBe(200);
+	});
+
+	test("a secret set with a trailing newline still works", async () => {
+		// Generating a token and piping it in is the documented route, and most
+		// generators emit a trailing newline; without trimming, every upload 403s.
+		expect((await ingest("deadbeef\n", "deadbeef")).status).toBe(200);
+	});
+
+	test("surrounding whitespace in the secret is ignored", async () => {
+		expect((await ingest("  deadbeef\r\n", "deadbeef")).status).toBe(200);
+	});
+
+	test("a wrong token is still refused", async () => {
+		expect((await ingest("deadbeef", "cafebabe")).status).toBe(403);
+	});
+
+	test("a secret of only whitespace disables ingest rather than allowing it", async () => {
+		expect((await ingest("   \n", "")).status).toBe(404);
+	});
+
+	test("no secret disables ingest", async () => {
+		expect((await ingest(undefined, "anything")).status).toBe(404);
+	});
+});

@@ -410,7 +410,10 @@ function bearerMatches(header: string | undefined, token: string): boolean {
  * the management API's rate budget. Disabled unless INGEST_TOKEN is set.
  */
 app.put("/ingest/:key{.+}", async (c) => {
-	const token = c.env.INGEST_TOKEN;
+	// Trimmed because the usual way to set this secret pipes a generated value in,
+	// and most generators end their output with a newline. A secret carrying one
+	// would reject every upload with a 403 that says nothing about why.
+	const token = c.env.INGEST_TOKEN?.trim();
 	if (!token) return jsonError(404, "ingest disabled");
 	if (!bearerMatches(c.req.header("Authorization"), token)) return jsonError(403, "unauthorized");
 
