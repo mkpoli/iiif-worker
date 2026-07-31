@@ -4,8 +4,11 @@
 	//
 	// To serve from your own domain, add a routes block:
 	//   "routes": [{ "pattern": "iiif.example.com", "custom_domain": true }]
-	// To enable uploads, set the secret the ingest route checks:
-	//   openssl rand -hex 24 | wrangler secret put INGEST_TOKEN
+	// To enable uploads, set the secret the ingest route checks. Generate it into
+	// a variable first: `wrangler secret put` never prints what it stored, so a
+	// piped value is one you cannot use afterwards.
+	//   INGEST_TOKEN=$(openssl rand -hex 24)
+	//   printf %s "$INGEST_TOKEN" | wrangler secret put INGEST_TOKEN
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "iiif-worker",
 	"main": "src/index.ts",

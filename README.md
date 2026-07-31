@@ -117,9 +117,11 @@ Set the upload token the Worker checks, then point the ingest CLI at a folder.
 Each file becomes an image identified by `{collection}/{filename}`.
 
 ```bash
-openssl rand -hex 24 | bunx wrangler secret put INGEST_TOKEN
+INGEST_TOKEN=$(openssl rand -hex 24)
+printf %s "$INGEST_TOKEN" | bunx wrangler secret put INGEST_TOKEN
+export INGEST_TOKEN          # the ingest scripts read this
+echo "$INGEST_TOKEN"         # save it: Cloudflare will not show it again
 
-export INGEST_TOKEN=<the token you just generated>
 BASE=https://iiif-worker.yourname.workers.dev
 
 bun run ingest/cli.ts ./scans --collection my-book --base $BASE --local ./out

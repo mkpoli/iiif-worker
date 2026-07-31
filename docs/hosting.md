@@ -39,11 +39,20 @@ Change `name` in `wrangler.jsonc` if you want a different one, and
 ## 3. Set an upload token
 
 Uploads go through the Worker and are refused unless this secret exists. Keep
-the value; the next step needs it.
+the value; the next step needs it, and Cloudflare will not show it again.
 
 ```bash
-openssl rand -hex 24 | bunx wrangler secret put INGEST_TOKEN
+INGEST_TOKEN=$(openssl rand -hex 24)
+printf %s "$INGEST_TOKEN" | bunx wrangler secret put INGEST_TOKEN
+export INGEST_TOKEN          # the ingest scripts read this
+echo "$INGEST_TOKEN"         # save it: Cloudflare will not show it again
 ```
+
+Generate it into a variable first. `wrangler secret put` reads the value from
+standard input and never prints it, so piping `openssl` straight in leaves you
+holding a token you cannot use. `printf` rather than `echo` because a trailing
+newline inside a secret is a good way to spend an hour wondering why every
+upload comes back 403.
 
 ## 4. Put some images in
 
@@ -51,7 +60,6 @@ Point it at a folder. Every file becomes an image identified by
 `{collection}/{filename without extension}`.
 
 ```bash
-export INGEST_TOKEN=<the value from step 3>
 BASE=https://iiif-worker.yourname.workers.dev
 
 bun run ingest/cli.ts ./scans --collection my-book --base $BASE --local ./out
