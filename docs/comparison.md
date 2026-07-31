@@ -1,8 +1,8 @@
 # IIIF Image API servers compared
 
 Every fact below was checked against the project's own documentation, source, or
-the GitHub API on 2026-07-30. Release versions and dates come from each
-project's releases endpoint. Where a claim could not be established from a
+the GitHub API on 2026-07-30, and every release row was re-checked against the
+releases endpoint on 2026-07-31 — none had moved. Where a claim could not be established from a
 primary source it says so; nothing here is filled in from reputation.
 
 Read the second section first if you are choosing a server. iiif-worker wins on
@@ -39,7 +39,7 @@ Licence, maintenance and colour handling:
 
 | | Licence | Latest release | Colour: ICC / CMYK / EXIF orientation |
 | :-- | :-- | :-- | :-- |
-| **iiif-worker** | MIT | v0.1.0, 2026-07-31 | ✗ / ✗ / applied at ingest |
+| **iiif-worker** | MIT | v0.1.0, 2026-07-31 | ✗ / ✓ at ingest / applied at ingest |
 | Cantaloupe | NCSA | v5.0.7, 2025-03-13 | transformed by some processors / unsupported in Java2d / exposed, auto-rotate unconfirmed |
 | IIPImage | GPL-3.0 | 1.3, 2025-05-28 | carried through, no transform found / not established / read on JPEG input |
 | SIPI | AGPL-3.0 | v6.3.0, 2026-07-29 | **transform via littlecms / ✓ / ✓ via exiv2** |
