@@ -13,6 +13,11 @@ hostname it is given — including a `workers.dev` one nobody knew in advance. S
 `PUBLIC_BASE` only when clients reach the Worker under a different host than it
 sees, as behind a proxy.
 
+That covers serving. Uploading needs one thing configured: the `INGEST_TOKEN`
+secret, without which the `/ingest` route stays closed and answers 404. A
+deployment with no token is a perfectly good read-only server for images placed
+in the bucket by other means.
+
 There is a deploy button in the README, and `docs/hosting.md` walks through the
 rest: uploading images, using your own domain, and the mistakes that cost an
 afternoon.
@@ -61,9 +66,22 @@ metadata.
 ### Verification
 
 157 unit tests over the request parser, the region and size arithmetic, pyramid
-level mapping, rotation, and the HTTP layer. The official IIIF validator run is
-reproducible with `bun run validation-image`, which builds the validator's own
-reference image and loads it into the local R2 simulator.
+level mapping, rotation, and the HTTP layer.
+
+The validator run is reproducible in three steps. `bun run validation-image`
+only prepares the fixture — it builds the validator's own reference image and
+loads it into the local R2 simulator — and does not run the validator itself:
+
+```bash
+bun run validation-image
+bunx wrangler dev --port 8791
+uvx --from iiif-validator iiif-validate.py \
+  -s localhost:8791 -p iiif/3 -i refimg --version 3.0 --level 2
+```
+
+Run it against a local server rather than a deployed one. The validator sends
+bare `urllib` requests, and a Cloudflare zone with default bot protection
+answers those with 403 before they reach the Worker.
 
 One thing worth knowing about this codebase: `@cf-wasm/photon` 0.3.7 ships a
 `rotate` that corrupts the buffer at every angle — a 60×40 solid fill returns
