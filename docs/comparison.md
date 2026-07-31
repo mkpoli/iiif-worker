@@ -2,8 +2,9 @@
 
 Every fact below was checked against the project's own documentation, source, or
 the GitHub API on 2026-07-30, and every release row was re-checked against the
-releases endpoint on 2026-07-31 — none had moved. Where a claim could not be established from a
-primary source it says so; nothing here is filled in from reputation.
+releases endpoint on 2026-07-31 — none had moved. Where a claim could not be
+established from a primary source it says so; nothing here is filled in from
+reputation.
 
 Read the second section first if you are choosing a server. iiif-worker wins on
 one narrow axis and loses badly on several others, and which of those matters
