@@ -90,11 +90,25 @@ far off; for gigapixel masters it is the wrong tool. Static Level-0 tiling stays
 cheapest option when you never need an arbitrary crop and can pre-render every tile a
 viewer will request.
 
-## Quick start
+## Deploy it
 
-You need a [Cloudflare account](https://dash.cloudflare.com/) with Workers and R2, and
-[Bun](https://bun.sh/). For a fuller walkthrough — no custom domain, what to check,
-and the mistakes that cost an afternoon — see [docs/hosting.md](./docs/hosting.md).
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/mkpoli/iiif-worker)
+
+One click. Cloudflare forks the repository, creates the R2 bucket, and deploys.
+Nothing needs configuring first: the service takes its address from the request,
+so it answers correctly on whatever `workers.dev` hostname it is given. Add
+images, and it serves them.
+
+Or from a checkout, which is the same three commands:
+
+```bash
+git clone https://github.com/mkpoli/iiif-worker && cd iiif-worker
+bun install
+bunx wrangler r2 bucket create iiif-images && bunx wrangler deploy
+```
+
+For putting images in, using your own domain, and the mistakes that cost an
+afternoon, see [docs/hosting.md](./docs/hosting.md).
 
 ```bash
 git clone https://github.com/mkpoli/iiif-worker

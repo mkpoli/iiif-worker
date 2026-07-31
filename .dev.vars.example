@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local development, or set as a Worker secret in
+# production. Uploads through /ingest are refused unless this exists.
+#   openssl rand -hex 24 | wrangler secret put INGEST_TOKEN
+INGEST_TOKEN=""
