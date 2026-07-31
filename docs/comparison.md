@@ -1,9 +1,10 @@
 # IIIF Image API servers compared
 
 Every fact below was checked against the project's own documentation, source, or
-the GitHub API on 2026-07-30. Release versions and dates come from each
-project's releases endpoint. Where a claim could not be established from a
-primary source it says so; nothing here is filled in from reputation.
+the GitHub API on 2026-07-30, and every release row was re-checked against the
+releases endpoint on 2026-07-31 — none had moved. Where a claim could not be
+established from a primary source it says so; nothing here is filled in from
+reputation.
 
 Read the second section first if you are choosing a server. iiif-worker wins on
 one narrow axis and loses badly on several others, and which of those matters
@@ -39,7 +40,7 @@ Licence, maintenance and colour handling:
 
 | | Licence | Latest release | Colour: ICC / CMYK / EXIF orientation |
 | :-- | :-- | :-- | :-- |
-| **iiif-worker** | MIT | unreleased | ✗ / ✗ / applied at ingest |
+| **iiif-worker** | MIT | v0.1.0, 2026-07-31 | ✗ / ✓ at ingest / applied at ingest |
 | Cantaloupe | NCSA | v5.0.7, 2025-03-13 | transformed by some processors / unsupported in Java2d / exposed, auto-rotate unconfirmed |
 | IIPImage | GPL-3.0 | 1.3, 2025-05-28 | carried through, no transform found / not established / read on JPEG input |
 | SIPI | AGPL-3.0 | v6.3.0, 2026-07-29 | **transform via littlecms / ✓ / ✓ via exiv2** |
@@ -72,31 +73,52 @@ awesome-iiif names one. Lambda is a microVM with native binaries available, so
 serverless-iiif is not the same category. Absence of a public repository is not
 proof that nothing exists privately.
 
-**What it is worse at, and will stay worse at.** Cantaloupe, IIPImage, SIPI and
-Wolpi read one tile out of a pyramidal TIFF or JPEG 2000 master. iiif-worker
-decodes a whole pyramid level per request. The pyramid keeps that cost
-proportional to the output for zoomed-out views, and at native resolution every
-tile still decodes the master.
+**What it is worse at today.** Cantaloupe, IIPImage, SIPI and Wolpi read one
+tile out of a pyramidal TIFF or JPEG 2000 master. iiif-worker decodes a whole
+pyramid level per request. The pyramid keeps that cost proportional to the
+output for zoomed-out views, and at native resolution every tile still decodes
+the master. Ingest refuses sources over 12 megapixels, because a Workers isolate
+has 128 MB, a decoded pixel costs four bytes, and a full-size request holds the
+decoded level and the transformed copy at once.
 
-The ceiling follows from the platform. A Workers isolate has 128 MB, a decoded
-pixel costs four bytes, and a full-size request holds the decoded level and the
-transformed copy at once, so ingest refuses sources over 12 MP. Cantaloupe and
-IIPImage serve gigapixel masters because native codecs give them random access
-and an operating system gives them memory. That gap is architectural. For
-scanned books and photographs — a leaf in the test collection is 2155×3452,
-about 7.4 MP — the ceiling is far away. For a gigapixel map or a hyperspectral
-scan this is the wrong tool, and no amount of work on this codebase changes
-that.
+An earlier version of this document called that ceiling architectural and said
+no amount of work on this codebase would change it. **That was wrong**, and the
+correction matters more than the original claim did. R2 serves HTTP range
+requests, and a tiled pyramidal TIFF carries per-tile offsets and byte counts in
+its IFDs. Tested against an 8000×8000 master — five times the current cap — the
+whole pyramid structure was read in 43 range reads totalling 1 388 bytes, and a
+single 256×256 tile was fetched and decoded by the existing photon build in 11
+range reads totalling 10 057 bytes, 0.68% of the file, with a peak of 0.26 MB of
+decoded pixels rather than 256 MB for the master. Nothing new had to be
+compiled: a JPEG-compressed tile decodes once the shared `JPEGTables` blob is
+spliced in front of it.
 
-There is also no JPEG 2000 anywhere on the path. No production-grade JP2
-decoder with random tile access was found in WASM form, so this is not a
-near-term gap to close.
+**None of that is shipped.** The measurements above come from a standalone
+experiment, not from the request path: ingest still refuses anything over 12
+megapixels, and the server still reads whole pyramid levels. The comparison
+table above describes what this server does today, and its `pTIFF / JP2` and
+large-master entries stay as they are until a tile-reading path exists.
 
-Beyond the pixels: no IIIF Authorization Flow, so embargoed or restricted
-material cannot be represented at all; no ICC colour management, which matters
-for reproduction-grade imaging; and the Presentation surface is one static
-manifest per collection, with no Collection resource, no `rights`, no
-`thumbnail`.
+What changes is the reason given. **Output** dimensions must stay capped — no
+isolate renders a gigapixel canvas, which is why every server in this table has
+a `maxArea`. **Master** dimensions need not be, so deep zoom over a very large
+master belongs on a roadmap rather than in a list of things the platform
+forbids.
+
+JPEG 2000 is the one that holds. A JP2 has no fixed tile index like a TIFF IFD,
+so random access means parsing TLM and PLT markers and driving a decoder that
+does not exist in production WASM form. Masters can be transcoded to pyramidal
+TIFF at ingest, where native codecs are available, which reaches the same place
+for far less work; decoding JP2 inside the isolate is not a near-term gap to
+close.
+
+Beyond the pixels: no IIIF Authorization Flow. Restricted material can be
+described — a `rights` statement is published in `info.json` when ingest records
+one — but nothing is enforced, so there is no way to serve a degraded version to
+anonymous callers and the full one to authenticated ones. No ICC colour
+management, which matters for reproduction-grade imaging. And the Presentation
+surface is one static manifest per collection, with no Collection resource and
+no `thumbnail`.
 
 **Features common elsewhere that are missing here.** A derivative cache with an
 eviction policy and a purge endpoint. Watermarking and redaction, which
@@ -104,13 +126,18 @@ Cantaloupe has and almost nothing else does. Auth — and note that full
 Authorization Flow 2.0 is rare enough across the whole field that iiiris having
 it is a genuine differentiator. Colour management, where several long-established
 servers also have gaps, so "not implemented" is closer to the norm than the
-exception.
+exception — and where normalising to sRGB at ingest, which is what iiiris does,
+reaches most of the benefit without a colour engine in the request path.
 
 **A fair summary.** For a collection of scanned pages or photographs where you
 want IIIF without running anything, this is a reasonable choice and unusually
-cheap. For a digitisation programme with JP2 masters, access control, or colour
-fidelity requirements, choose Cantaloupe, IIPImage or SIPI. Those three are also
-the ones with a decade of institutional deployment behind them — Bayerische
+cheap. For a digitisation programme with JP2 masters or gigapixel sources,
+choose Cantaloupe, IIPImage or SIPI today; for colour fidelity, SIPI. If access
+control is the requirement, note from the table above that none of those three
+implements the Authorization Flow as specified — Cantaloupe offers
+delegate-script hooks and SIPI Auth 1.0, and only iiiris has the full
+Authorization Flow 2.0. Cantaloupe, IIPImage and SIPI are the ones with a decade
+of institutional deployment behind them — Bayerische
 Staatsbibliothek serves roughly 8 million newspaper pages through Hymir, the
 Internet Archive put 9.3 million items behind Cantaloupe, the Qatar Digital
 Library runs 500,000 JP2s on IIPImage.
