@@ -129,7 +129,15 @@ async function main(): Promise<void> {
 		// `.rotate()` with no argument applies the EXIF orientation. Without it a
 		// phone photo or scanner output lands sideways and the tag is dropped on
 		// re-encode, leaving no way for a client to correct it.
-		const src = sharp(join(args.folder, file), { failOn: "error" }).rotate();
+		//
+		// `.toColourspace("srgb")` states what the JPEG encoder would otherwise
+		// arrive at by accident. A CMYK scan reaching an encoder that only writes
+		// three channels is the case that matters: it converts through the
+		// profile either way, and saying so here means a change of output format
+		// later cannot silently change what the colour does.
+		const src = sharp(join(args.folder, file), { failOn: "error" })
+			.rotate()
+			.toColourspace("srgb");
 		const meta = await src.metadata();
 		const width = meta.autoOrient?.width ?? meta.width ?? 0;
 		const height = meta.autoOrient?.height ?? meta.height ?? 0;
