@@ -21,6 +21,11 @@
 		// reach the Worker under a different host than it sees, as behind a proxy:
 		//   "PUBLIC_BASE": "https://iiif.example.com/iiif/3",
 		//
+		// Optional per-axis ceilings, unset by default. A lone MAX_WIDTH caps both
+		// axes, which is what the specification says it means.
+		//   "MAX_WIDTH": "4000",
+		//   "MAX_HEIGHT": "4000",
+		//
 		// Output ceiling. MAX_AREA caps decoded output pixels; a decoded pixel
 		// costs four bytes and an isolate has 128 MB, so raising this far above
 		// the default risks requests failing on memory instead of returning an
