@@ -53,7 +53,7 @@
 	"scripts": {
 		"dev": "wrangler dev",
 		"deploy": "wrangler deploy",
-		"check": "biome check src ingest test bench && tsc --noEmit",
+		"check": "biome check src ingest test bench && tsrs --noEmit",
 		"fix": "biome check --write src ingest test bench",
 		"test": "bun test",
 		"types": "wrangler types",
@@ -70,7 +70,7 @@
 		"@types/bun": "^1.3.14",
 		"aws4fetch": "^1.0.20",
 		"sharp": "^0.34.2",
-		"typescript": "^5.5.2",
+		"tsrs": "0.20.1-ts7.1.0-beta",
 		"wrangler": "^4.90.0"
 	}
 }
